@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # On a Node checkNodeVersion is written to reject, such as 20.11 (Docker's node:20.11.1), `one build` and `one dev` should
-# stop with its "One requires Node" line. Both fail loading modules that import `styleText` from node:util first, and
-# the check parses `v20` as NaN. repro/ installs one from npm at the versions repro/bun.lock pins; set `one` in
-# repro/package.json to try another release.
-# Exits 1 while either command ends without a "One requires Node" line, 0 once both print it, and 2 when a setup step
-# fails or the Node on PATH is one the check accepts.
+# stop with its "One requires Node" line, naming a Node above the one running. Both fail loading modules that import
+# `styleText` from node:util first, the check parses `v20` as NaN, and its line names 20.11, the Node it refuses.
+# repro/ installs one from npm at the versions repro/bun.lock pins; set `one` in repro/package.json to try another
+# release.
+# Exits 1 while either command ends without One's line naming a Node above the one running, 0 once both print it, and 2
+# when a setup step fails or the Node on PATH is one the check accepts.
 set -Eeuo pipefail
 trap 'echo "failed: $BASH_COMMAND" >&2; exit 2' ERR
 cd "$(dirname "$0")"
@@ -27,26 +28,32 @@ report() {
   grep -o -E '(node_modules/(one|rolldown)/[^ )]+:[0-9]+)' "$2" | head -3 | sed 's/^/at /' || true
 }
 
-summary=("node $node_version, one $one_version, rolldown $rolldown_version")
-status=0
-bunx one build > tmp/build.log 2>&1 || status=$?
-summary+=("\$ one build" "$(report "$status" tmp/build.log)")
+# Succeeds where a log holds One's line and the first version on it is above the Node running.
+refuses_this_node() {
+  local line
+  line=$(grep -m1 -o 'One requires Node.*' "$1") || return 1
+  node -e '
+    const [line, running] = process.argv.slice(1)
+    const named = /(\d+)\.(\d+)(?:\.(\d+))?/.exec(line)
+    if (named === null) process.exit(1)
+    const required = named.slice(1).map((part) => Number(part ?? 0))
+    const current = running.split(".").map(Number)
+    const difference = required.map((part, index) => part - current[index]).find((part) => part !== 0) ?? 0
+    process.exit(difference > 0 ? 0 : 1)
+  ' "$line" "$node_version"
+}
 
-bunx one dev --port 8201 > tmp/dev.log 2>&1 &
-server=$!
-trap 'kill "$server" 2> /dev/null || true' EXIT
-dev_status="none, running after 30 s"
-for attempt in $(seq 1 30); do
-  if ! kill -0 "$server" 2> /dev/null; then
-    dev_status=0
-    wait "$server" || dev_status=$?
-    break
-  fi
-  sleep 1
-done
+summary=("node $node_version, one $one_version, rolldown $rolldown_version")
+build_status=0
+bunx one build > tmp/build.log 2>&1 || build_status=$?
+summary+=("\$ one build" "$(report "$build_status" tmp/build.log)")
+
+dev_status=0
+timeout 30 bunx one dev --port 8201 > tmp/dev.log 2>&1 || dev_status=$?
+[ "$dev_status" != 124 ] || dev_status="none, running after 30 s"
 summary+=("\$ one dev --port 8201" "$(report "$dev_status" tmp/dev.log)")
 
 echo
 printf '%s\n' "${summary[@]}"
-grep -q 'One requires Node' tmp/build.log && grep -q 'One requires Node' tmp/dev.log && exit 0
+refuses_this_node tmp/build.log && refuses_this_node tmp/dev.log && exit 0
 exit 1
