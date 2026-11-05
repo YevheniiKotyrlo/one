@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# The root package.json patches react-native-safe-area-context@5.7.0 while bun.lock resolves 5.8.1, which already lacks
+# the code the patch removes, so every `bun install` warns that the patch no longer applies.
+# Exits 1 while bun install prints that warning, 0 once it does not, and 2 when a setup step fails.
+set -Eeuo pipefail
+trap 'echo "failed: $BASH_COMMAND" >&2; exit 2' ERR
+cd "$(dirname "$0")/.."
+mkdir -p repro/tmp
+bun install 2>&1 | tee repro/tmp/install.log
+package=$(node -p "require('path').dirname(require.resolve('react-native-safe-area-context/package.json'))")
+echo
+echo "patchedDependencies entries for react-native-safe-area-context: $(node -p "Object.keys(require('./package.json').patchedDependencies).filter((name) => name.startsWith('react-native-safe-area-context@')).join(', ')")"
+echo "installed: react-native-safe-area-context $(node -p "require('react-native-safe-area-context/package.json').version")"
+echo "lines of its SafeAreaView.kt naming dispatchViewUpdates or waitForReactLayout, which the patch removes: $(grep -c -E 'dispatchViewUpdates|waitForReactLayout' "$package"/android/src/main/java/com/th3rdwave/safeareacontext/SafeAreaView.kt || true)"
+grep 'react-native-safe-area-context@5.7.0.patch' repro/tmp/install.log || exit 0
+exit 1
