@@ -12,8 +12,8 @@ checkout="repro/ at $revision"
 docker pull --quiet node:26 > /dev/null
 exec docker run --rm -e CHECKOUT="$checkout" -v "$source_folder:/source:ro" node:26 bash -c '
   set -Eeuo pipefail
-  trap "exit 2" ERR
-  npm install --global --silent bun@1.4.4 > /dev/null 2>&1
+  trap "echo \"failed: \$BASH_COMMAND\" >&2; exit 2" ERR
+  npm install --global --silent bun@1.4.4 > /tmp/npm-install.log 2>&1 || { cat /tmp/npm-install.log >&2; exit 2; }
   mkdir /repro
   tar -C /source --exclude=./node_modules --exclude=./tmp -cf - . | tar -C /repro -xf -
   . /etc/os-release

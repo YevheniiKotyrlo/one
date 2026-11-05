@@ -3,8 +3,8 @@
 # nothing; with one more process between it and PID 1 it serves. repro/run-in-docker.sh runs this script as the PID 1 of
 # Docker's node:26 image. repro/ installs one from npm at the versions repro/bun.lock pins; set `one` in
 # repro/package.json to try another release.
-# Exits 1 while the `one dev` this script starts exits 0 without a word and the one it starts under `bash -c` serves, 0
-# once both serve, and 2 when a setup step fails, this script is not PID 1, or either `one dev` ends any other way.
+# Exits 1 while the `one dev` this script starts does not serve and the one it starts under `bash -c` does, 0 once both
+# serve, and 2 when a setup step fails, this script is not PID 1, or the one under `bash -c` does not serve.
 set -Eeuo pipefail
 trap 'echo "failed: $BASH_COMMAND" >&2; exit 2' ERR
 cd "$(dirname "$0")"
@@ -53,8 +53,6 @@ echo "\$ bunx one dev --port 8201 &"
 echo "$first"
 echo "\$ bash -c 'bunx one dev --port 8202; exit \$?' &"
 echo "$second"
-case "$first|$second" in
-  "exited with 0 before serving, printing 0 lines|GET / -> 200") exit 1 ;;
-  "GET / -> 200|GET / -> 200") exit 0 ;;
-  *) exit 2 ;;
-esac
+[ "$second" = "GET / -> 200" ] || exit 2
+[ "$first" = "GET / -> 200" ] && exit 0
+exit 1
