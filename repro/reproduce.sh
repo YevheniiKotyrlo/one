@@ -1,19 +1,17 @@
 #!/usr/bin/env bash
-# Run from the repository root.
-set -u
+# `one build` prints Rolldown's INVALID_OPTION warning for the client build's `codeSplitting.minSize`, which has no `groups`.
+# Exits 1 while it does, 0 once it does not, and 2 when a setup step fails.
+set -Eeuo pipefail
+trap 'echo "failed: $BASH_COMMAND" >&2; exit 2' ERR
+cd "$(dirname "$0")/.."
 bun install
-[ -d packages/one/dist/esm ] || bun run build
+bun run build
 cd repro
 mkdir -p tmp
-echo '$ one build'
-bunx one build > tmp/build.log 2>&1
-echo "one build exit code: $?"
-grep INVALID_OPTION tmp/build.log
-node -e '
-const { readdirSync, statSync } = require("node:fs")
-const dir = "dist/client/assets"
-const sizes = readdirSync(dir).filter((name) => name.endsWith(".js")).map((name) => [name, statSync(`${dir}/${name}`).size])
-const small = sizes.filter(([, size]) => size < 42000)
-console.log(`${dir}: ${sizes.length} JavaScript files, ${small.length} below 42000 bytes`)
-for (const [name, size] of small.sort((a, b) => b[1] - a[1]).slice(0, 5)) console.log(`  ${size} ${name}`)
-'
+NO_COLOR=1 bunx one build 2>&1 | tee tmp/build.log
+
+echo
+node -p "'vite ' + require('vite/package.json').version + ', rolldown ' + require(require.resolve('rolldown/package.json', { paths: [require.resolve('vite')] })).version"
+echo 'INVALID_OPTION lines in the output of one build:'
+grep INVALID_OPTION tmp/build.log | sed $'s/\033\\[[0-9;]*m//g' || exit 0
+exit 1
