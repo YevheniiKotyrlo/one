@@ -4,10 +4,11 @@ set -u
 bun install
 [ -d packages/one/dist/esm ] || bun run build
 cd repro
+mkdir -p tmp
 echo '$ one build'
-bunx one build > build.log 2>&1
+bunx one build > tmp/build.log 2>&1
 echo "one build exit code: $?"
-grep 'INVALID_OPTION' build.log
+grep INVALID_OPTION tmp/build.log
 node -e '
 const { readdirSync, statSync } = require("node:fs")
 const dir = "dist/client/assets"
