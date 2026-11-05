@@ -2,19 +2,20 @@
 # On a Node checkNodeVersion is written to reject, such as 20.11 (Docker's node:20.11.1), `one build` and `one dev` should
 # stop with its "One requires Node" line, naming a Node above the one running. Both fail loading modules that import
 # `styleText` from node:util first, the check parses `v20` as NaN, and its line names 20.11, the Node it refuses.
-# repro/ installs one from npm at the versions repro/bun.lock pins; set `one` in repro/package.json to try another
-# release.
+# repro/run-in-docker.sh runs it in Docker's node:20.11.1 image. repro/ installs one from npm at the versions
+# repro/bun.lock pins; set `one` in repro/package.json to try another release.
 # Exits 1 while either command ends without One's line naming a Node above the one running, 0 once both print it, and 2
-# when a setup step fails or the Node on PATH is one the check accepts.
+# when a setup step fails, timeout is missing or the Node on PATH is one the check accepts.
 set -Eeuo pipefail
 trap 'echo "failed: $BASH_COMMAND" >&2; exit 2' ERR
 cd "$(dirname "$0")"
 node_version=$(node -p 'process.versions.node')
 IFS=. read -r major minor _ <<< "$node_version"
 if [ "$major" -gt 20 ] || { [ "$major" -eq 20 ] && [ "$minor" -ge 12 ]; }; then
-  echo "node $node_version is one checkNodeVersion accepts; run this on Node 20.11, as Docker's node:20.11.1 image has it" >&2
+  echo "node $node_version is one checkNodeVersion accepts; run this on Node 20.11, as repro/run-in-docker.sh does" >&2
   exit 2
 fi
+command -v timeout > /dev/null || { echo "this needs timeout, from GNU coreutils, as repro/run-in-docker.sh has it" >&2; exit 2; }
 bun install
 mkdir -p tmp
 export NO_COLOR=1
@@ -34,7 +35,7 @@ refuses_this_node() {
   line=$(grep -m1 -o 'One requires Node.*' "$1") || return 1
   node -e '
     const [line, running] = process.argv.slice(1)
-    const named = /(\d+)\.(\d+)(?:\.(\d+))?/.exec(line)
+    const named = /(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(line)
     if (named === null) process.exit(1)
     const required = named.slice(1).map((part) => Number(part ?? 0))
     const current = running.split(".").map(Number)
