@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# On a host without Xcode (Linux, Windows), `one prebuild` without `--platform` exits non-zero.
-# Exits 1 while it does, 0 once it exits 0, and 2 when a setup step fails.
+# On a host without xcrun (Linux, Windows), `one prebuild` without `--platform` exits non-zero.
+# Exits 1 while it does, 0 once it exits 0, and 2 when xcrun is on PATH or a setup step fails.
 set -Eeuo pipefail
 trap 'echo "failed: $BASH_COMMAND" >&2; exit 2' ERR
 cd "$(dirname "$0")/.."
+if command -v xcrun > /dev/null; then echo "xcrun is on PATH; this shows a host without it" >&2; exit 2; fi
 bun install
 bun run build
 cd repro
