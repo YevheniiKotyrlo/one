@@ -42,12 +42,20 @@ NO_COLOR=1 bunx one dev --port "$port" > tmp/dev.log 2>&1 &
 server=$!
 trap 'kill "$server" 2> /dev/null || true; [ "$route_types" = kept ] || rm -f app/routes.d.ts' EXIT
 for attempt in $(seq 1 120); do
-  kill -0 "$server" 2> /dev/null || { cat tmp/dev.log; echo "one dev exited" >&2; exit 2; }
+  if ! kill -0 "$server" 2> /dev/null; then
+    cat tmp/dev.log
+    echo "one dev exited" >&2
+    [ "$PPID" != 1 ] || echo "this script runs as a child of PID 1, and vxrn's setupOrphanDetection ends one dev when its parent or grandparent is PID 1; in a container, run it with --init" >&2
+    exit 2
+  fi
   [ "$(get / 30 tmp/response.txt)" != 000 ] && break
   sleep 1
 done
+[ "$(get / 30 tmp/response.txt)" != 000 ] || { cat tmp/dev.log; echo "one dev does not answer on port $port" >&2; exit 2; }
 bundle=/index.bundle?platform=android
-summary+=("\$ one dev, then GET $bundle -> $(get "$bundle" 600 tmp/android-dev.bundle)")
+bundle_status=$(get "$bundle" 600 tmp/android-dev.bundle)
+summary+=("\$ one dev, then GET $bundle -> $bundle_status")
+[ "$bundle_status" = 200 ] || { cat tmp/dev.log; echo "the Android bundle request answered $bundle_status" >&2; exit 2; }
 summary+=("$(listing dist)")
 [ -f dist/__virtual-native-entry.js ] && written=1
 
