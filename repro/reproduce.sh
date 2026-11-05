@@ -2,7 +2,7 @@
 # Run from the repository root.
 set -u
 bun install
-bun run build
+[ -d packages/one/dist/esm ] || bun run build
 cd repro
 echo '$ one build'
 bunx one build > build.log 2>&1
