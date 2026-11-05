@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# With Node 26.11 or later on PATH, `one serve` answers the request for the root route's loader module with 500.
-# Exits 1 while it does, 0 once it does not, and 2 when a setup step fails.
+# With Node 26.11 or later on PATH, `one serve` answers the request for the root route's loader module with 500 and
+# logs `TypeError: Illegal invocation`. Exits 1 while it does, 0 once that request answers 200, and 2 when a setup
+# step fails or the request ends any other way.
 set -Eeuo pipefail
 trap 'echo "failed: $BASH_COMMAND" >&2; exit 2' ERR
 cd "$(dirname "$0")/.."
@@ -31,4 +32,9 @@ echo "node $(node --version), undici $(node -p 'process.versions.undici')"
 echo "GET / -> $(get /)"
 echo "GET $loader -> $loader_status"
 grep -m1 -A6 TypeError tmp/serve.log || true
-[ "$loader_status" != 500 ] || exit 1
+case "$loader_status" in
+  200) exit 0 ;;
+  500) grep -q 'TypeError: Illegal invocation' tmp/serve.log && exit 1 ;;
+esac
+echo "the loader request answered $loader_status without TypeError: Illegal invocation" >&2
+exit 2
