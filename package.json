@@ -9,7 +9,8 @@
     "./apps/*",
     "./packages/*",
     "./examples/*",
-    "./tests/*"
+    "./tests/*",
+    "./repro"
   ],
   "packageManager": "bun@1.4.4",
   "engines": {

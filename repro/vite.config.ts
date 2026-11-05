@@ -7,6 +7,13 @@ export default defineConfig({
       web: {
         defaultRenderMode: 'ssg',
       },
+      native: {
+        app: {
+          name: 'Repro',
+          ios: { bundleId: 'dev.onestack.repro' },
+          android: { applicationId: 'dev.onestack.repro' },
+        },
+      },
     }),
   ],
 })
