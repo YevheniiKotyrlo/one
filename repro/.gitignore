@@ -9,6 +9,7 @@
 
 tmp
 dist
+out
 node_modules
 
 *.tsbuildinfo
