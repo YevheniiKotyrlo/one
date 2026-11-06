@@ -14,6 +14,10 @@
 # store keeps the earlier label.
 set -Eeuo pipefail
 trap 'echo "failed: $BASH_COMMAND" >&2; exit 2' ERR
+if ((BASH_VERSINFO[0] < 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 1))); then
+  echo "reproduce.sh waits with wait -n -p, which needs bash 5.1 or later; this is bash $BASH_VERSION" >&2
+  exit 2
+fi
 cd "$(dirname "$0")/.."
 bun install
 bun run build
