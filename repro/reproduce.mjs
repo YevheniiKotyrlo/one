@@ -12,7 +12,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { createServer } from 'node:net'
-import { tmpdir } from 'node:os'
+import { release, tmpdir } from 'node:os'
 import { basename, join, relative, resolve, sep } from 'node:path'
 import process from 'node:process'
 import { createInterface } from 'node:readline'
@@ -37,9 +37,12 @@ for (const event of ['uncaughtException', 'unhandledRejection']) {
 }
 
 let workspace
-// Output names the workspace, the checkout and this node by those words, never by their paths on this machine.
+// Output names the workspace, the checkout and this node by those words, never by their paths on this machine, and
+// shows no IPv4 address, such as the LAN address `one dev` prints.
 const redact = (text) => {
-  let redacted = String(text).replaceAll(process.execPath, 'node')
+  let redacted = String(text)
+    .replaceAll(process.execPath, 'node')
+    .replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, '<address>')
   for (const [path, name] of [
     [workspace, '<workspace>'],
     [checkout, '<checkout>'],
@@ -165,6 +168,8 @@ const portIsFree = () =>
   })
 
 let env = process.env
+let pid
+const isAppLine = (line) => pid !== undefined && new RegExp(`^\\w/ReactNativeJS\\(\\s*${pid}\\):`).test(line)
 let server
 let logcat
 let applicationId
@@ -182,7 +187,7 @@ try {
   const serial = process.env.ANDROID_SERIAL || (attached.length === 1 ? attached[0] : undefined)
   if (!serial || !attached.includes(serial)) {
     throw new StepFailure(
-      `needs one attached Android device, or ANDROID_SERIAL naming one of: ${attached.join(', ') || 'none attached'}`
+      `needs one attached Android device, or ANDROID_SERIAL naming one of the ${attached.length} attached`
     )
   }
   env = { ...process.env, ANDROID_SERIAL: serial }
@@ -192,7 +197,8 @@ try {
   const bunVersion = await read('bun', ['--version'])
   const android = `Android ${await property('ro.build.version.release')} (API ${await property('ro.build.version.sdk')})`
   console.log(
-    `${process.platform} ${process.arch}, node ${process.versions.node}, bun ${bunVersion}, one checkout at ${revision}; ${android}, ${abi}`
+    `${process.platform} ${process.arch} ${release()}, node ${process.versions.node}, bun ${bunVersion}, ` +
+      `one checkout at ${revision}; ${android}, ${abi}`
   )
   if (!(await portIsFree())) throw new StepFailure(`port ${port}, which the app's debug build loads from, is in use`)
 
@@ -235,15 +241,19 @@ try {
     env: {
       ...env,
       ORG_GRADLE_PROJECT_reactNativeArchitectures: abi,
+      'ORG_GRADLE_PROJECT_kotlin.compiler.execution.strategy': 'in-process',
       GRADLE_OPTS: [env.GRADLE_OPTS, '-Dorg.gradle.daemon=false'].filter(Boolean).join(' '),
     },
   })
   await run(adb, ['shell', 'am', 'force-stop', applicationId], { env })
 
-  logcat = watch('adb logcat', adb, ['logcat', '-T', '1', '-v', 'brief', 'ReactNativeJS:V', '*:S'], { env })
-  await run(adb, ['shell', 'am', 'start', '-W', '-n', `${applicationId}/.MainActivity`], { env, capture: true })
-  const pid = await read(adb, ['shell', 'pidof', applicationId], { env })
-  const isAppLine = (line) => new RegExp(`^\\w/ReactNativeJS\\(\\s*${pid}\\):`).test(line)
+  // logcat reads from this device time on, so lines written before it attaches are still read.
+  const since = await read(adb, ['shell', 'date', '+%s'], { env })
+  if (!/^\d+$/.test(since)) throw new StepFailure(`adb shell date +%s printed ${redact(since)}, not a time`)
+  logcat = watch('adb logcat', adb, ['logcat', '-T', `${since}.000`, '-v', 'brief', 'ReactNativeJS:V', '*:S'], { env })
+  const launch = await read(adb, ['shell', 'am', 'start', '-W', '-n', `${applicationId}/.MainActivity`], { env })
+  if (/^Error/m.test(launch)) throw new StepFailure(`adb shell am start -W did not launch the app:\n${redact(launch)}`)
+  pid = await read(adb, ['shell', 'pidof', applicationId], { env })
   await logcat.waitFor(
     `"${hookLine}" from the app (process ${pid}) in logcat`,
     (lines) => lines.some((line) => isAppLine(line) && line.includes(hookLine)),
@@ -294,9 +304,9 @@ if (server) {
   console.log("one dev's last lines:")
   for (const line of server.lines.slice(-30)) console.log(`  ${redact(line)}`)
 }
-if (logcat) {
-  console.log('adb logcat ReactNativeJS:V, its last lines:')
-  for (const line of logcat.lines.slice(-30)) console.log(`  ${redact(line)}`)
+if (logcat && pid !== undefined) {
+  console.log(`adb logcat ReactNativeJS:V, the app's last lines (process ${pid}):`)
+  for (const line of logcat.lines.filter(isAppLine).slice(-30)) console.log(`  ${redact(line)}`)
 }
 console.log(redact(failure))
 process.exit(2)
