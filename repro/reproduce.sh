@@ -13,7 +13,11 @@ trap 'echo "failed: $BASH_COMMAND" >&2; exit 2' ERR
 cd "$(dirname "$0")/.."
 bun install
 bun run build
-app=$(mktemp -d)/app
+server=
+drain=
+workspace=$(mktemp -d)
+trap '[ -z "$server" ] || kill -- "-$server" 2> /dev/null || true; rm -rf "$workspace"' EXIT
+app=$workspace/app
 mkdir "$app"
 tar -C repro --exclude=./node_modules --exclude=./tmp --exclude=./yarn.lock -cf - . | tar -C "$app" -xf -
 node repro/use-workspace-packages.mjs "$app"
@@ -22,9 +26,6 @@ bun install
 mkdir tmp
 export NO_COLOR=1
 bundle_url='http://localhost:8201/index.bundle?platform=android&dev=true&minify=false&modulesOnly=false&runModule=true'
-server=
-drain=
-trap '[ -z "$server" ] || kill -- "-$server" 2> /dev/null || true' EXIT
 
 # Starts one dev in a process group of its own, with bash between it and this script, its output in the log the first
 # argument names; reads that output until one dev says it is running or the output ends, and prints how it ended: the
@@ -43,7 +44,7 @@ serve() {
   if [[ $line != *'Server running on'* ]]; then
     exec {output}<&-
     if kill -0 "$server" 2> /dev/null; then
-      echo "one dev neither said it was running nor exited within 600 s"
+      echo "one dev printed nothing for 600 s, neither saying it was running nor exiting"
       return
     fi
     wait "$server" || status=$?
@@ -64,7 +65,8 @@ stop() {
     server=
   fi
   if [ -n "$drain" ]; then
-    wait "$drain" || true
+    kill "$drain" 2> /dev/null || true
+    wait "$drain" 2> /dev/null || true
     drain=
   fi
 }
@@ -77,13 +79,15 @@ summary=("one and @vxrn/vite-plugin-metro, packed from the checkout")
 serve tmp/dev-without-preset.log > tmp/outcome-without-preset.txt
 stop
 without=$(< tmp/outcome-without-preset.txt)
-asks=$({ grep -m 1 'babel-preset-expo' tmp/dev-without-preset.log || true; } | sed 's/^ *//')
+# The first line that asks the app for babel-preset-expo: one naming it with "requires", "install" or "missing".
+asks=$({ grep 'babel-preset-expo' tmp/dev-without-preset.log || true; } | { grep -m 1 -E '\brequires?\b|\b[Ii]nstall|\bmissing\b' || true; } | sed 's/^ *//')
 summary+=("\$ one dev, without babel-preset-expo" "$without")
 if [ -z "$asks" ]; then
   echo
   printf '%s\n' "${summary[@]}"
   [ "$without" != "GET the Android bundle -> 200" ] || exit 0
-  echo "one dev ended without naming babel-preset-expo; its output is in $app/tmp/dev-without-preset.log" >&2
+  cat tmp/dev-without-preset.log >&2
+  echo "one dev ended without asking for babel-preset-expo" >&2
   exit 2
 fi
 summary+=("$asks")

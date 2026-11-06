@@ -9,6 +9,7 @@ changed=$(git status --porcelain | wc -l)
 checkout="checkout at $revision"
 [ "$((changed))" -eq 0 ] || checkout="$checkout, $((changed)) files changed since"
 archive=$(mktemp)
+trap 'rm -f "$archive"' EXIT
 git ls-files -z --cached --others --exclude-standard | tar --null --ignore-failed-read -T - -cf "$archive"
 docker pull --quiet node:26 > /dev/null
 status=0
@@ -24,5 +25,4 @@ docker run --rm -i --init -e CHECKOUT="$checkout" node:26 bash -c '
   echo "$PRETTY_NAME, node $node_version, bun $bun_version, $CHECKOUT"
   exec bash /one/repro/reproduce.sh
 ' < "$archive" || status=$?
-rm -f "$archive"
 exit "$status"
