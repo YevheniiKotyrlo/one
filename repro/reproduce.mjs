@@ -37,12 +37,13 @@ for (const event of ['uncaughtException', 'unhandledRejection']) {
 }
 
 let workspace
-// Output names the workspace, the checkout and this node by those words, never by their paths on this machine, and
-// shows no IPv4 address, such as the LAN address `one dev` prints.
+let serial
+// Output names the workspace, the checkout, this node and the device's serial by those words, never by their values on
+// this machine, and shows no IPv4 address, such as the LAN address `one dev` prints.
 const redact = (text) => {
-  let redacted = String(text)
-    .replaceAll(process.execPath, 'node')
-    .replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, '<address>')
+  let redacted = String(text).replaceAll(process.execPath, 'node')
+  if (serial) redacted = redacted.replaceAll(serial, '<serial>')
+  redacted = redacted.replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, '<address>')
   for (const [path, name] of [
     [workspace, '<workspace>'],
     [checkout, '<checkout>'],
@@ -186,7 +187,7 @@ try {
     .map((line) => line.trim().split(/\s+/))
     .filter(([serial, state]) => serial && state === 'device')
     .map(([serial]) => serial)
-  const serial = process.env.ANDROID_SERIAL || (attached.length === 1 ? attached[0] : undefined)
+  serial = process.env.ANDROID_SERIAL || (attached.length === 1 ? attached[0] : undefined)
   if (!serial || !attached.includes(serial)) {
     throw new StepFailure(
       `needs one attached Android device, or ANDROID_SERIAL naming one of the ${attached.length} attached`
