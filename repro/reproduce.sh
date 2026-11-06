@@ -5,9 +5,9 @@
 # workspace, installs repro/ in a folder outside it from the workspace's packed packages (use-workspace-packages.mjs),
 # runs `one prebuild` there and counts the lines of android/'s MainActivity.kt that name RNScreensFragmentFactory and
 # OneLaunchScreen; then, as a control, it runs `one prebuild --platform android` on a clean copy and counts them again.
-# Exits 1 while `one prebuild` ends on the iOS simulator SDK lookup; 0 once it patches android/ and does not end on that
-# lookup; 2 when the host is not such a Mac, a step before `one prebuild` fails, the control leaves android/ unpatched,
-# or `one prebuild` ends another way.
+# Exits 1 while `one prebuild` ends on an iOS simulator SDK lookup (its last ERROR line names one); 0 once it patches
+# android/ and does not end on one; 2 when the host is not such a Mac, a step before `one prebuild` fails, the control
+# leaves android/ unpatched, or `one prebuild` ends another way.
 set -Eeuo pipefail
 trap 'echo "failed: $BASH_COMMAND" >&2; exit 2' ERR
 system=$(uname -s)
@@ -79,7 +79,8 @@ prebuild_status=$status
 prebuild_activity=$activity
 prebuild_screens=$screens
 prebuild_launch_screen=$launch_screen
-error_line=$(grep -m1 ' ERROR ' prebuild.log || true)
+grep ' ERROR ' prebuild.log > prebuild-errors.log || true
+error_line=$(tail -1 prebuild-errors.log)
 prebuild control.log --platform android
 rm -rf android ios
 
@@ -111,18 +112,18 @@ if [ -n "$prebuild_activity" ] && [ "$prebuild_screens" -gt 0 ] && [ "$prebuild_
 fi
 ended_on_sdk_lookup=no
 case $error_line in
-  *'xcrun --sdk iphonesimulator --show-sdk-path'*) ended_on_sdk_lookup=yes ;;
+  *'xcrun --sdk iphonesimulator --show-sdk-'*) ended_on_sdk_lookup=yes ;;
 esac
 if [ "$prebuild_status" -ne 0 ] && [ "$ended_on_sdk_lookup" = yes ]; then
   if [ "$patched" = yes ]; then
-    echo "one prebuild patched android/ and still ended on the iOS simulator SDK lookup"
+    echo "one prebuild patched android/ and still ended on an iOS simulator SDK lookup"
   else
-    echo "one prebuild ended on the iOS simulator SDK lookup before it patched android/"
+    echo "one prebuild ended on an iOS simulator SDK lookup before it patched android/"
   fi
   exit 1
 fi
 if [ "$patched" = yes ] && [ "$ended_on_sdk_lookup" = no ]; then
-  echo "one prebuild patched android/ and did not end on the iOS simulator SDK lookup"
+  echo "one prebuild patched android/ and did not end on an iOS simulator SDK lookup"
   exit 0
 fi
 echo "one prebuild ended another way"
