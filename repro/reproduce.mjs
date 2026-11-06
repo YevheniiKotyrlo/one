@@ -1,20 +1,19 @@
-// In Vite mode, an Android app's console output reaches neither logcat nor the `one dev` terminal. repro/ is an app on
-// this checkout's one (`workspace:*`) whose app/index.tsx calls console.log('repro-console-line') and then writes
-// 'repro-hook-line' to logcat itself through the host's nativeLoggingHook. The script builds the workspace, installs
-// repro/ in a folder outside it from the workspace's packed packages (use-workspace-packages.mjs), and builds and
-// installs the app with `one run:android` against a first `one dev`. It then stops that server and the app, starts a
-// second `one dev`, clears logcat and launches the app: once the hook line is in logcat and the app's HMR client has
-// connected, it stops the app, and once the server reports that client gone, it reads what reached each place.
+// In Vite mode, an Android app's console.log never reaches logcat. repro/ is an app on this checkout's one
+// (`workspace:*`) whose app/index.tsx calls console.log('repro-console-line') and then writes 'repro-hook-line' to
+// logcat itself through the host's nativeLoggingHook. The script builds the workspace, installs repro/ in a folder
+// outside it from the workspace's packed packages (use-workspace-packages.mjs), starts `one dev`, and builds and
+// installs the app for the device's ABI with `one run:android`. It then launches the app, and once the app's hook line
+// is in logcat, stops it and reads the app's own logcat lines. It uninstalls the app and removes the port forward it
+// added before it prints the result.
 // Needs an Android device or emulator; ANDROID_SERIAL names it when more than one is attached. From the checkout:
 // node repro/reproduce.mjs
-// Exits 1 while 'repro-console-line' is missing from logcat before the hook line or from the second server's output,
-// 0 once it reaches both, and 2 when a step fails, port 8081 is taken, the app logs no hook line, or the server never
-// reports the app's HMR client connecting or leaving.
+// Exits 1 while 'repro-console-line' is missing from the app's logcat lines before its hook line, 0 once it is there,
+// and 2 when a step fails, port 8081 is taken, or the app logs no hook line.
 import { spawn, spawnSync } from 'node:child_process'
 import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join, relative, resolve, sep } from 'node:path'
+import { basename, join, relative, resolve, sep } from 'node:path'
 import process from 'node:process'
 import { createInterface } from 'node:readline'
 
@@ -25,6 +24,7 @@ const checkout = resolve(import.meta.dirname, '..')
 const sdk = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT
 const adb = sdk ? join(sdk, 'platform-tools', process.platform === 'win32' ? 'adb.exe' : 'adb') : 'adb'
 const ansi = /\u001b\[[0-9;]*m/g
+const isWindows = process.platform === 'win32'
 
 class StepFailure extends Error {}
 
@@ -36,43 +36,71 @@ for (const event of ['uncaughtException', 'unhandledRejection']) {
   })
 }
 
-// Runs a command to its end without blocking the event loop, so the servers' and logcat's output keeps being read,
+let workspace
+// Output names the workspace, the checkout and this node by those words, never by their paths on this machine.
+const redact = (text) => {
+  let redacted = String(text).replaceAll(process.execPath, 'node')
+  for (const [path, name] of [
+    [workspace, '<workspace>'],
+    [checkout, '<checkout>'],
+  ]) {
+    if (!path) continue
+    redacted = redacted.replaceAll(path, name).replaceAll(path.replaceAll('\\', '/'), name)
+  }
+  return redacted
+}
+const describe = (command, args) =>
+  redact([command === process.execPath ? 'node' : basename(command), ...args].join(' '))
+
+// Runs a command to its end without blocking the event loop, so the server's and logcat's output keeps being read,
 // and resolves with what it printed when `capture` is set, or lets it print otherwise.
 const run = (command, args, { capture = false, ...options } = {}) =>
   new Promise((resolveRun, rejectRun) => {
-    const child = spawn(command, args, { stdio: ['ignore', capture ? 'pipe' : 'inherit', capture ? 'pipe' : 'inherit'], ...options })
-    let output = ''
+    const output = capture ? 'pipe' : 'inherit'
+    const child = spawn(command, args, { stdio: ['ignore', output, output], windowsHide: true, ...options })
+    let printed = ''
     child.stdout?.on('data', (chunk) => {
-      output += chunk
+      printed += chunk
     })
     child.stderr?.on('data', (chunk) => {
-      output += chunk
+      printed += chunk
     })
-    child.on('error', (error) => rejectRun(new StepFailure(`${[command, ...args].join(' ')} did not start: ${error.message}`)))
+    child.on('error', (error) => rejectRun(new StepFailure(`${describe(command, args)} did not start: ${error.message}`)))
     child.on('close', (code, signal) => {
-      if (code === 0) resolveRun(output.trim())
-      else rejectRun(new StepFailure(`${[command, ...args].join(' ')} exited ${code ?? signal}${capture ? `: ${output.trim()}` : ''}`))
+      if (code === 0) resolveRun(printed.trim())
+      else {
+        rejectRun(
+          new StepFailure(
+            `${describe(command, args)} exited ${code ?? signal}${capture && printed.trim() ? `: ${redact(printed.trim())}` : ''}`
+          )
+        )
+      }
     })
   })
 const read = (command, args, options = {}) => run(command, args, { ...options, capture: true })
 
-// A child whose output lines are kept, and whose waits settle on the line that satisfies them or fail when the child
-// exits or the deadline passes.
-const watch = (name, command, args, options) => {
-  const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], ...options })
+// A child whose output lines are kept, and whose waits settle on the line that satisfies them or fail when its
+// output ends or the deadline passes. `tree` stops the child's descendants with it.
+const watch = (name, command, args, { tree = false, ...options }) => {
+  const child = spawn(command, args, {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+    detached: tree && !isWindows,
+    ...options,
+  })
   const lines = []
   const waits = new Set()
-  let exit
+  let ended
   const settle = () => {
     for (const wait of waits) {
       if (wait.isSatisfied(lines)) {
         waits.delete(wait)
         clearTimeout(wait.timer)
         wait.resolve()
-      } else if (exit !== undefined) {
+      } else if (ended !== undefined) {
         waits.delete(wait)
         clearTimeout(wait.timer)
-        wait.reject(new StepFailure(`${name} exited (${exit}) before ${wait.description}`))
+        wait.reject(new StepFailure(`${name} exited (${ended}) before ${wait.description}`))
       }
     }
   }
@@ -82,17 +110,20 @@ const watch = (name, command, args, options) => {
       settle()
     })
   }
+  let exitCode
   const exited = new Promise((resolveExit) => {
-    child.on('error', (error) => {
-      exit = error.message
-      settle()
+    child.on('exit', (code, signal) => {
+      exitCode = code ?? signal
       resolveExit()
     })
-    child.on('close', (code, signal) => {
-      exit = code ?? signal
-      settle()
-      resolveExit()
-    })
+  })
+  child.on('error', (error) => {
+    ended = error.message
+    settle()
+  })
+  child.on('close', () => {
+    ended = exitCode
+    settle()
   })
   const waitFor = (description, isSatisfied, seconds) =>
     new Promise((resolveWait, rejectWait) => {
@@ -104,36 +135,26 @@ const watch = (name, command, args, options) => {
       waits.add(wait)
       settle()
     })
-  const stop = async () => {
-    if (exit !== undefined) return
-    if (process.platform === 'win32') {
-      spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
-    } else {
-      try {
-        process.kill(-child.pid, 'SIGTERM')
-      } catch {
-        child.kill('SIGTERM')
-      }
+  const kill = (signal) => {
+    if (tree && isWindows) {
+      spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+      return
     }
-    const killTimer = setTimeout(() => {
-      try {
-        process.kill(process.platform === 'win32' ? child.pid : -child.pid, 'SIGKILL')
-      } catch {}
-    }, 30_000)
-    await exited
-    clearTimeout(killTimer)
+    try {
+      process.kill(tree ? -child.pid : child.pid, signal)
+    } catch {}
+  }
+  const stop = async () => {
+    if (exitCode === undefined && child.pid !== undefined) {
+      kill('SIGTERM')
+      const fallback = setTimeout(() => kill('SIGKILL'), 30_000)
+      await exited
+      clearTimeout(fallback)
+    }
+    child.stdout.destroy()
+    child.stderr.destroy()
   }
   return { lines, waitFor, stop }
-}
-
-const startServer = async (app, env) => {
-  const server = watch('one dev', process.execPath, [join(app, 'node_modules', 'one', 'run.mjs'), 'dev', '--port', String(port)], {
-    cwd: app,
-    env: { ...env, NO_COLOR: '1', FORCE_COLOR: '0' },
-    detached: process.platform !== 'win32',
-  })
-  await server.waitFor('"Server running on" from one dev', (lines) => lines.some((line) => line.includes('Server running on')), 300)
-  return server
 }
 
 const portIsFree = () =>
@@ -143,12 +164,14 @@ const portIsFree = () =>
     probe.listen(port, () => probe.close(() => resolvePort(true)))
   })
 
-let workspace
-const servers = []
-let logcat
 let env = process.env
-let reversed = false
-let exitCode = 2
+let server
+let logcat
+let applicationId
+let installed = false
+let forwarded = false
+let failure
+let result
 try {
   const attached = (await read(adb, ['devices']))
     .split('\n')
@@ -164,12 +187,12 @@ try {
   }
   env = { ...process.env, ANDROID_SERIAL: serial }
   const property = (name) => read(adb, ['shell', 'getprop', name], { env })
+  const abi = await property('ro.product.cpu.abi')
   const revision = await read('git', ['rev-parse', '--short=9', 'HEAD'], { cwd: checkout })
   const bunVersion = await read('bun', ['--version'])
   const android = `Android ${await property('ro.build.version.release')} (API ${await property('ro.build.version.sdk')})`
   console.log(
-    `${process.platform} ${process.arch}, node ${process.versions.node}, bun ${bunVersion}, one checkout at ${revision}; ` +
-      `${android}, ${await property('ro.product.cpu.abi')}`
+    `${process.platform} ${process.arch}, node ${process.versions.node}, bun ${bunVersion}, one checkout at ${revision}; ${android}, ${abi}`
   )
   if (!(await portIsFree())) throw new StepFailure(`port ${port}, which the app's debug build loads from, is in use`)
 
@@ -185,73 +208,95 @@ try {
   })
   await run(process.execPath, [join(checkout, 'repro', 'use-workspace-packages.mjs'), app], { cwd: checkout })
   await run('bun', ['install'], { cwd: app })
-  const applicationId = JSON.parse(readFileSync(join(app, 'app.json'), 'utf8')).expo.android.package
+  applicationId = /applicationId: '([^']+)'/.exec(readFileSync(join(app, 'vite.config.ts'), 'utf8'))?.[1]
+  if (!applicationId) throw new StepFailure('repro/vite.config.ts names no native.app.android.applicationId')
 
-  await run(adb, ['reverse', `tcp:${port}`, `tcp:${port}`], { env })
-  reversed = true
-  servers.push(await startServer(app, env))
-  await run(process.execPath, [join(app, 'node_modules', 'one', 'run.mjs'), 'run:android'], { cwd: app, env })
+  const forwards = await read(adb, ['reverse', '--list'], { env })
+  const alreadyForwarded = forwards
+    .split('\n')
+    .some((line) => line.trim().split(/\s+/).slice(-2).join(' ') === `tcp:${port} tcp:${port}`)
+  if (!alreadyForwarded) {
+    await run(adb, ['reverse', `tcp:${port}`, `tcp:${port}`], { env })
+    forwarded = true
+  }
+  server = watch('one dev', process.execPath, [join(app, 'node_modules', 'one', 'run.mjs'), 'dev', '--port', String(port)], {
+    tree: true,
+    cwd: app,
+    env: { ...env, NO_COLOR: '1', FORCE_COLOR: '0' },
+  })
+  await server.waitFor(
+    '"Server running on" from one dev',
+    (lines) => lines.some((line) => line.includes('Server running on')),
+    300
+  )
+  installed = true
+  await run(process.execPath, [join(app, 'node_modules', 'one', 'run.mjs'), 'run:android'], {
+    cwd: app,
+    env: {
+      ...env,
+      ORG_GRADLE_PROJECT_reactNativeArchitectures: abi,
+      GRADLE_OPTS: [env.GRADLE_OPTS, '-Dorg.gradle.daemon=false'].filter(Boolean).join(' '),
+    },
+  })
   await run(adb, ['shell', 'am', 'force-stop', applicationId], { env })
-  await servers.pop().stop()
 
-  await run(adb, ['logcat', '-c'], { env })
-  logcat = watch('adb logcat', adb, ['logcat', '-v', 'brief', 'ReactNativeJS:V', '*:S'], { env })
-  const server = await startServer(app, env)
-  servers.push(server)
+  logcat = watch('adb logcat', adb, ['logcat', '-T', '1', '-v', 'brief', 'ReactNativeJS:V', '*:S'], { env })
   await run(adb, ['shell', 'am', 'start', '-W', '-n', `${applicationId}/.MainActivity`], { env, capture: true })
   const pid = await read(adb, ['shell', 'pidof', applicationId], { env })
   const isAppLine = (line) => new RegExp(`^\\w/ReactNativeJS\\(\\s*${pid}\\):`).test(line)
-  const connectedClient = () =>
-    server.lines.map((line) => /\[hmr\] native client connected platform=android client=(\S+)/.exec(line)?.[1]).find(Boolean)
-  await Promise.all([
-    logcat.waitFor(`"${hookLine}" from the app in logcat`, (lines) => lines.some((line) => isAppLine(line) && line.includes(hookLine)), 300),
-    server.waitFor("the app's HMR client connecting to one dev", () => connectedClient() !== undefined, 300),
-  ])
-  const client = connectedClient()
-  await run(adb, ['shell', 'am', 'force-stop', applicationId], { env })
-  await server.waitFor(
-    `one dev reporting the app's HMR client (${client}) gone`,
-    (lines) => lines.some((line) => line.includes(`native client disconnected platform=android client=${client}`)),
-    60
+  await logcat.waitFor(
+    `"${hookLine}" from the app (process ${pid}) in logcat`,
+    (lines) => lines.some((line) => isAppLine(line) && line.includes(hookLine)),
+    300
   )
-  await server.stop()
-  await logcat.stop()
-
+  await run(adb, ['shell', 'am', 'force-stop', applicationId], { env })
   const appLines = logcat.lines.filter(isAppLine)
   const hookIndex = appLines.findIndex((line) => line.includes(hookLine))
-  const consoleIndex = appLines.findIndex((line) => line.includes(consoleLine))
-  const inLogcat = consoleIndex !== -1 && consoleIndex < hookIndex
-  const inTerminal = server.lines.some((line) => line.includes(consoleLine))
-  const serverLines = server.lines.filter((line) => line.includes('[hmr]') || line.includes('repro-'))
-  console.log('')
-  console.log(`adb logcat ReactNativeJS:V, the app's lines (process ${pid}) from its launch until it was stopped:`)
-  for (const line of appLines) console.log(`  ${line}`)
-  console.log(`one dev, its lines naming [hmr] or repro- from its start until it reported the app's HMR client gone:`)
-  for (const line of serverLines) console.log(`  ${line}`)
-  console.log(`${consoleLine} in logcat before ${hookLine}: ${inLogcat ? 'yes' : 'no'}`)
-  console.log(`${consoleLine} in one dev's output: ${inTerminal ? 'yes' : 'no'}`)
-  const reached = [inLogcat && 'logcat', inTerminal && 'the one dev terminal'].filter(Boolean)
-  const missed = [!inLogcat && 'logcat', !inTerminal && 'the one dev terminal'].filter(Boolean)
-  console.log(
-    reached.length === 0
-      ? `console.log('${consoleLine}') reached neither logcat nor the one dev terminal`
-      : missed.length === 0
-        ? `console.log('${consoleLine}') reached logcat and the one dev terminal`
-        : `console.log('${consoleLine}') reached ${reached[0]} but not ${missed[0]}`
-  )
-  exitCode = missed.length === 0 ? 0 : 1
+  const consoleIndex = appLines.findIndex((line) => line.endsWith(`): ${consoleLine}`))
+  result = { pid, appLines, reached: consoleIndex !== -1 && consoleIndex < hookIndex }
 } catch (error) {
-  console.log(error instanceof StepFailure ? error.message : `a step threw: ${error?.stack ?? error}`)
-  exitCode = 2
-} finally {
-  // Cleanup reports what it could not undo and never changes the verdict.
+  failure = error instanceof StepFailure ? error.message : `a step threw: ${error?.stack ?? error}`
+}
+
+// Everything the run started or changed is undone before the result, so the result is the last thing printed.
+const cleanupNotes = []
+const undo = async (what, step) => {
   try {
-    for (const server of servers) await server.stop()
-    await logcat?.stop()
-    if (reversed) spawnSync(adb, ['reverse', '--remove', `tcp:${port}`], { stdio: 'ignore', env })
-    if (workspace) rmSync(workspace, { recursive: true, force: true, maxRetries: 5 })
+    await step()
   } catch (error) {
-    console.log(`cleanup: ${error?.message ?? error}`)
+    cleanupNotes.push(`cleanup: ${what}: ${redact(error?.message ?? error)}`)
   }
 }
-process.exit(exitCode)
+await undo('stopping one dev', () => server?.stop())
+await undo('stopping adb logcat', () => logcat?.stop())
+if (installed) {
+  await undo(`uninstalling ${applicationId}`, () => run(adb, ['uninstall', applicationId], { env, capture: true }))
+}
+if (forwarded) {
+  await undo(`removing the tcp:${port} forward`, () =>
+    run(adb, ['reverse', '--remove', `tcp:${port}`], { env, capture: true })
+  )
+}
+if (workspace) {
+  await undo('removing the workspace', () => rmSync(workspace, { recursive: true, force: true, maxRetries: 5 }))
+}
+for (const note of cleanupNotes) console.log(note)
+
+if (result) {
+  console.log('')
+  console.log(`adb logcat ReactNativeJS:V, the app's lines (process ${result.pid}) from its launch until it was stopped:`)
+  for (const line of result.appLines) console.log(`  ${line}`)
+  console.log(`${consoleLine} in logcat before ${hookLine}: ${result.reached ? 'yes' : 'no'}`)
+  console.log(`console.log('${consoleLine}') ${result.reached ? 'reached' : 'did not reach'} logcat`)
+  process.exit(result.reached ? 0 : 1)
+}
+if (server) {
+  console.log("one dev's last lines:")
+  for (const line of server.lines.slice(-30)) console.log(`  ${redact(line)}`)
+}
+if (logcat) {
+  console.log('adb logcat ReactNativeJS:V, its last lines:')
+  for (const line of logcat.lines.slice(-30)) console.log(`  ${redact(line)}`)
+}
+console.log(redact(failure))
+process.exit(2)
