@@ -56,18 +56,20 @@ const describe = (command, args) =>
   redact([command === process.execPath ? 'node' : basename(command), ...args].join(' '))
 
 // Runs a command to its end without blocking the event loop, so the server's and logcat's output keeps being read,
-// and resolves with what it printed when `capture` is set, or lets it print otherwise.
+// and resolves with what it printed when `capture` is set, or prints each of its lines through redact() otherwise.
 const run = (command, args, { capture = false, ...options } = {}) =>
   new Promise((resolveRun, rejectRun) => {
-    const output = capture ? 'pipe' : 'inherit'
-    const child = spawn(command, args, { stdio: ['ignore', output, output], windowsHide: true, ...options })
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, ...options })
     let printed = ''
-    child.stdout?.on('data', (chunk) => {
-      printed += chunk
-    })
-    child.stderr?.on('data', (chunk) => {
-      printed += chunk
-    })
+    for (const stream of [child.stdout, child.stderr]) {
+      if (capture) {
+        stream.on('data', (chunk) => {
+          printed += chunk
+        })
+      } else {
+        createInterface({ input: stream }).on('line', (line) => console.log(redact(line)))
+      }
+    }
     child.on('error', (error) => rejectRun(new StepFailure(`${describe(command, args)} did not start: ${error.message}`)))
     child.on('close', (code, signal) => {
       if (code === 0) resolveRun(printed.trim())
@@ -241,8 +243,14 @@ try {
     env: {
       ...env,
       ORG_GRADLE_PROJECT_reactNativeArchitectures: abi,
-      'ORG_GRADLE_PROJECT_kotlin.compiler.execution.strategy': 'in-process',
-      GRADLE_OPTS: [env.GRADLE_OPTS, '-Dorg.gradle.daemon=false'].filter(Boolean).join(' '),
+      // gradlew's /bin/sh can drop a variable whose name has dots, so the Kotlin setting rides in GRADLE_OPTS.
+      GRADLE_OPTS: [
+        env.GRADLE_OPTS,
+        '-Dorg.gradle.daemon=false',
+        '-Dorg.gradle.project.kotlin.compiler.execution.strategy=in-process',
+      ]
+        .filter(Boolean)
+        .join(' '),
     },
   })
   await run(adb, ['shell', 'am', 'force-stop', applicationId], { env })
@@ -300,7 +308,7 @@ for (const note of cleanupNotes) console.log(note)
 if (result) {
   console.log('')
   console.log(`adb logcat ReactNativeJS:V, the app's lines (process ${result.pid}) from its launch until it was stopped:`)
-  for (const line of result.appLines) console.log(`  ${line}`)
+  for (const line of result.appLines) console.log(`  ${redact(line)}`)
   console.log(`${consoleLine} in logcat before ${hookLine}: ${result.reached ? 'yes' : 'no'}`)
   console.log(`console.log('${consoleLine}') ${result.reached ? 'reached' : 'did not reach'} logcat`)
   process.exit(result.reached ? 0 : 1)
