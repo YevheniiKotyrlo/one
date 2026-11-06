@@ -36,7 +36,7 @@ echo "macOS $macos_version $architecture, developer directory $developer_directo
 cd "$(dirname "$0")/.."
 bun install
 bun run build
-workspace=$(mktemp -d)
+workspace=$(mktemp -d "${TMPDIR:-/tmp}/repro.XXXXXX")
 # Removes the workspace without changing the exit status.
 exit_status=0
 trap 'exit_status=$?; set +e; trap - ERR; rm -rf "$workspace" 2> /dev/null; exit "$exit_status"' EXIT
