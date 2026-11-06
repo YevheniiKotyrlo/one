@@ -12,6 +12,7 @@ export default function Index() {
       }}
     >
       <Text>Hello world, from One</Text>
+      <Text>{process.env.VITE_REPRO_LABEL}</Text>
     </View>
   )
 }

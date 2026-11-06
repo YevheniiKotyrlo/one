@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # In Metro mode, a `one dev` start with nothing changed transforms every module again and writes a new entry for each
 # to Metro's file store. repro/ is an app on this checkout's one and @vxrn/vite-plugin-metro (`workspace:*`) with
-# native.bundler 'metro'; repro/run-in-docker.sh runs this script in Docker's node:26 image. The script builds the
-# workspace, installs repro/ in a folder outside it from the workspace's packed packages (use-workspace-packages.mjs),
-# and starts `one dev` four times, the last two with ONE_CACHE_KEY set; each start requests the Android bundle once and
-# stops the server, and the script prints how many entries Metro's file store ($TMPDIR/metro-cache, Metro's default)
-# gained meanwhile, and how often the last bundle holds the ONE_CACHE_KEY it was served with.
+# native.bundler 'metro', whose app/index.tsx renders process.env.VITE_REPRO_LABEL; repro/run-in-docker.sh runs this
+# script in Docker's node:26 image. The script builds the workspace, installs repro/ in a folder outside it from the
+# workspace's packed packages (use-workspace-packages.mjs), and starts `one dev` five times: twice, twice more with
+# ONE_CACHE_KEY set, and once more with VITE_REPRO_LABEL changed. Each start requests the Android bundle once and stops
+# the server, and the script prints how many entries Metro's file store ($TMPDIR/metro-cache, Metro's default) gained
+# meanwhile and whether the bundle holds VITE_REPRO_LABEL's value.
 # Exits 1 while the second start writes more than 1 in 100 of the entries the first wrote and the second start with
-# ONE_CACHE_KEY pinned writes no more than that, 0 once the second start writes no more than that, and 2 when a step
-# fails, a request gets no bundle, the first start writes no entry, or the starts with ONE_CACHE_KEY pinned miss too.
+# ONE_CACHE_KEY pinned writes no more than that; 0 once the second start writes no more than that and the start after
+# VITE_REPRO_LABEL changes holds its new value; and 2 when a step fails, a request gets no bundle, the first start
+# writes no entry or lacks the label, the starts with ONE_CACHE_KEY pinned miss too, or a reused store keeps the old
+# label.
 set -Eeuo pipefail
 trap 'echo "failed: $BASH_COMMAND" >&2; exit 2' ERR
 cd "$(dirname "$0")/.."
@@ -17,7 +20,8 @@ bun run build
 server=
 workspace=$(mktemp -d)
 # Ends a server still running and removes the workspace without changing the exit status.
-trap 'status=$?; set +e; trap - ERR; [ -z "$server" ] || kill -KILL -- "-$server" 2> /dev/null; rm -rf "$workspace" 2> /dev/null; exit "$status"' EXIT
+exit_status=0
+trap 'exit_status=$?; set +e; trap - ERR; [ -z "$server" ] || kill -KILL -- "-$server" 2> /dev/null; rm -rf "$workspace" 2> /dev/null; exit "$exit_status"' EXIT
 app=$workspace/app
 mkdir "$app"
 tar -C repro --exclude=./node_modules --exclude=./tmp --exclude=./yarn.lock -cf - . | tar -C "$app" -xf -
@@ -26,16 +30,18 @@ cd "$app"
 bun install
 mkdir tmp "$workspace/tmpdir"
 unset ONE_CACHE_KEY METRO_RESET_CACHE
-export NO_COLOR=1 TMPDIR=$workspace/tmpdir
+first_label=repro-label-one
+second_label=repro-label-two
+export NO_COLOR=1 TMPDIR=$workspace/tmpdir VITE_REPRO_LABEL=$first_label
 store=$TMPDIR/metro-cache
 bundle_url='http://localhost:8201/index.bundle?platform=android&dev=true&minify=false&modulesOnly=false&runModule=true'
 
 # Starts one dev as the leader of a process group of its own, reads its output until it says it is running, requests
-# the Android bundle once, stops the group with SIGTERM and waits for one dev to exit (60 s at most), and sets `written`
-# to the entries the store gained or rewrote meanwhile and `summary` to one line saying so. The first argument names
-# the start.
+# the Android bundle once, stops the group with SIGTERM and waits for one dev to exit (60 s at most). Sets `written` to
+# the entries the store gained or rewrote meanwhile, `labelled` to whether the bundle holds VITE_REPRO_LABEL's value,
+# and `summary` to one line saying both. The first argument names the start.
 start() {
-  local name=$1 line='' output answer status seconds total watchdog
+  local name=$1 line='' output answer status seconds total holds
   touch "tmp/$name.marker"
   mkfifo "tmp/$name.fifo"
   setsid node node_modules/one/run.mjs dev --port 8201 > "tmp/$name.fifo" 2>&1 &
@@ -56,15 +62,12 @@ start() {
   status=${answer%% *}
   printf -v seconds '%.2f' "${answer#* }"
   kill -- "-$server" 2> /dev/null || true
-  (sleep 60 && touch "tmp/$name.stop-timeout" && kill -KILL -- "-$server" 2> /dev/null) &
-  watchdog=$!
-  wait "$server" || true
-  kill "$watchdog" 2> /dev/null || true
-  server=
-  if [ -e "tmp/$name.stop-timeout" ]; then
+  if ! timeout 60 tail --pid="$server" -f /dev/null; then
     echo "$name: one dev did not exit within 60 s of SIGTERM" >&2
     exit 2
   fi
+  wait "$server" || true
+  server=
   if [ "$status" != 200 ] || ! grep -q '__d(' "tmp/$name.bundle.js"; then
     cat "tmp/$name.log" >&2
     echo "$name: the bundle request got no bundle (HTTP status $status)" >&2
@@ -76,7 +79,14 @@ start() {
     written=$(find "$store" -type f -newer "tmp/$name.marker" | wc -l)
     total=$(find "$store" -type f | wc -l)
   fi
-  summary="$name: GET the Android bundle -> $status in ${seconds} s; Metro's file store: $written entries written, $total in all"
+  if grep -qF -- "$VITE_REPRO_LABEL" "tmp/$name.bundle.js"; then
+    labelled=yes
+    holds=holds
+  else
+    labelled=no
+    holds=lacks
+  fi
+  summary="$name: Metro's file store: $written entries written, $total in all; the Android bundle, $status in $seconds s, $holds $VITE_REPRO_LABEL"
 }
 
 # Whether a start that wrote as many entries as the second argument reused the store an earlier start that wrote as
@@ -88,31 +98,48 @@ reused() {
 metro_version=$(node -p "require('metro/package.json').version")
 echo
 echo "one and @vxrn/vite-plugin-metro, packed from the checkout; metro $metro_version"
+echo "with VITE_REPRO_LABEL=$VITE_REPRO_LABEL, which app/index.tsx renders:"
 start 'start 1'
 first_written=$written
+first_labelled=$labelled
 echo "$summary"
 start 'start 2'
 second_written=$written
 echo "$summary"
 export ONE_CACHE_KEY=12345678
-echo "with ONE_CACHE_KEY=$ONE_CACHE_KEY:"
+echo "with ONE_CACHE_KEY=$ONE_CACHE_KEY too:"
 start 'start 3'
 third_written=$written
 echo "$summary"
 start 'start 4'
 fourth_written=$written
 echo "$summary"
-key_count=$(node -p 'require("fs").readFileSync(process.argv[1], "utf8").split(process.argv[2]).length - 1' "tmp/start 4.bundle.js" "$ONE_CACHE_KEY")
-echo "start 4's bundle holds $ONE_CACHE_KEY $key_count times"
+export VITE_REPRO_LABEL=$second_label
+echo "with VITE_REPRO_LABEL=$VITE_REPRO_LABEL:"
+start 'start 5'
+fifth_labelled=$labelled
+echo "$summary"
 
 if [ "$first_written" -eq 0 ]; then
   echo "the first start wrote no entry to $store" >&2
   exit 2
 fi
+if [ "$first_labelled" != yes ]; then
+  echo "start 1's bundle lacks VITE_REPRO_LABEL's value $first_label" >&2
+  exit 2
+fi
 if reused "$first_written" "$second_written"; then
+  if [ "$fifth_labelled" != yes ]; then
+    echo "start 5's bundle lacks VITE_REPRO_LABEL's new value $second_label" >&2
+    exit 2
+  fi
   exit 0
 fi
-if [ "$third_written" -eq 0 ] || ! reused "$third_written" "$fourth_written"; then
+if [ "$third_written" -eq 0 ]; then
+  echo "start 3, the first with ONE_CACHE_KEY pinned, wrote no entry" >&2
+  exit 2
+fi
+if ! reused "$third_written" "$fourth_written"; then
   echo "with ONE_CACHE_KEY pinned, start 4 still wrote $fourth_written of the $third_written entries start 3 wrote" >&2
   exit 2
 fi
