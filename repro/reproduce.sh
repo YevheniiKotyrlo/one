@@ -72,9 +72,7 @@ count_processes() {
   { grep -- "$1" tmp/loads.log || true; } | cut -d ' ' -f 1 | sort -u | wc -l
 }
 
-one_version=$(node -p "require('one/package.json').version")
-plugin_version=$(node -p "require('@vxrn/vite-plugin-metro/package.json').version")
-summary=("one $one_version and @vxrn/vite-plugin-metro $plugin_version, packed from the checkout")
+summary=("one and @vxrn/vite-plugin-metro, packed from the checkout")
 
 serve tmp/dev-without-preset.log > tmp/outcome-without-preset.txt
 stop
