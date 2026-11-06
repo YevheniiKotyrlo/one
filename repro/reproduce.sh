@@ -4,7 +4,8 @@
 # native.bundler 'metro'; repro/run-in-docker.sh runs this script in Docker's node:26 image. The script builds the
 # workspace, installs repro/ in a folder outside it from the workspace's packed packages (use-workspace-packages.mjs),
 # and starts `one dev` four times, the last two with ONE_CACHE_KEY set; each start requests the Android bundle once,
-# and the script prints how many entries Metro's file store ($TMPDIR/metro-cache, Metro's default) gained meanwhile.
+# and the script prints how many entries Metro's file store ($TMPDIR/metro-cache, Metro's default) gained meanwhile,
+# and how often the last bundle holds the ONE_CACHE_KEY it was served with.
 # Exits 1 while the second start writes more than 1 in 100 of the entries the first wrote, 0 once it writes no more,
 # and 2 when a step fails, a request gets no bundle, or the first start writes no entry.
 set -Eeuo pipefail
@@ -83,6 +84,8 @@ start 'start 3'
 echo "$summary"
 start 'start 4'
 echo "$summary"
+key_count=$(node -p 'require("fs").readFileSync(process.argv[1], "utf8").split(process.argv[2]).length - 1' "tmp/start 4.bundle.js" "$ONE_CACHE_KEY")
+echo "start 4's bundle holds $ONE_CACHE_KEY $key_count times"
 
 if [ "$first_written" -eq 0 ]; then
   echo "the first start wrote no entry to $store" >&2
