@@ -12,7 +12,10 @@ trap 'echo "failed: $BASH_COMMAND" >&2; exit 2' ERR
 cd "$(dirname "$0")/.."
 bun install
 bun run build
-app=$(mktemp -d)/app
+server=
+workspace=$(mktemp -d)
+trap '[ -z "$server" ] || kill -- "-$server" 2> /dev/null || true; rm -rf "$workspace"' EXIT
+app=$workspace/app
 mkdir "$app"
 tar -C repro --exclude=./node_modules --exclude=./tmp --exclude=./yarn.lock -cf - . | tar -C "$app" -xf -
 node repro/use-workspace-packages.mjs "$app"
@@ -21,8 +24,6 @@ bun install
 mkdir tmp
 export NO_COLOR=1
 bundle_url='http://localhost:8201/index.bundle?platform=android&dev=true&minify=false&modulesOnly=false&runModule=true'
-server=
-trap '[ -z "$server" ] || kill -- "-$server" 2> /dev/null || true' EXIT
 
 # one dev in a process group of its own, with bash between it and this script; its output is read until it says it is
 # running or the output ends.
@@ -36,12 +37,18 @@ while IFS= read -r -t 600 line <&"$output"; do
   [[ $line != *'Server running on'* ]] || break
 done
 if [[ $line != *'Server running on'* ]]; then
-  echo "one dev did not say it was running; its output is in $app/tmp/dev.log" >&2
+  cat tmp/dev.log >&2
+  echo "one dev did not say it was running" >&2
   exit 2
 fi
 cat <&"$output" >> tmp/dev.log &
 exec {output}<&-
 status=$(curl -s --max-time 900 -o tmp/answer.json -w '%{http_code}' "$bundle_url" || true)
+if [ ! -s tmp/answer.json ]; then
+  cat tmp/dev.log >&2
+  echo "the bundle request got no answer (HTTP status $status)" >&2
+  exit 2
+fi
 
 metro_version=$(node -p "require('metro/package.json').version")
 broken_line=$(sed -n 4p app/index.tsx)
