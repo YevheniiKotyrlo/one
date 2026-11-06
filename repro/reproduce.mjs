@@ -280,7 +280,12 @@ const undo = async (what, step) => {
 await undo('stopping one dev', () => server?.stop())
 await undo('stopping adb logcat', () => logcat?.stop())
 if (installed) {
-  await undo(`uninstalling ${applicationId}`, () => run(adb, ['uninstall', applicationId], { env, capture: true }))
+  await undo(`uninstalling ${applicationId}`, async () => {
+    const packages = await read(adb, ['shell', 'pm', 'list', 'packages', applicationId], { env })
+    if (packages.split('\n').some((line) => line.trim() === `package:${applicationId}`)) {
+      await run(adb, ['uninstall', applicationId], { env, capture: true })
+    }
+  })
 }
 if (forwarded) {
   await undo(`removing the tcp:${port} forward`, () =>
