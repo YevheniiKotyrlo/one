@@ -5,9 +5,9 @@
 # workspace, installs repro/ in a folder outside it from the workspace's packed packages (use-workspace-packages.mjs),
 # runs `one prebuild` there and counts the lines of android/'s MainActivity.kt that name RNScreensFragmentFactory and
 # OneLaunchScreen; then, as a control, it runs `one prebuild --platform android` on a clean copy and counts them again.
-# Exits 1 while `one prebuild` ends on an iOS simulator SDK lookup (its last ERROR line names one); 0 once it patches
-# android/ and does not end on one; 2 when the host is not such a Mac, a step before `one prebuild` fails, the control
-# leaves android/ unpatched, or `one prebuild` ends another way.
+# Exits 1 while `one prebuild` fails and ends on an iOS simulator SDK lookup (its last ERROR line names one); 0 once it
+# patches android/ and does not end on one; 2 when the host is not such a Mac, a step before `one prebuild` fails, the
+# control leaves android/ unpatched, or `one prebuild` ends another way.
 set -Eeuo pipefail
 trap 'echo "failed: $BASH_COMMAND" >&2; exit 2' ERR
 system=$(uname -s)
@@ -111,10 +111,12 @@ if [ -n "$prebuild_activity" ] && [ "$prebuild_screens" -gt 0 ] && [ "$prebuild_
   patched=yes
 fi
 ended_on_sdk_lookup=no
-case $error_line in
-  *'xcrun --sdk iphonesimulator --show-sdk-'*) ended_on_sdk_lookup=yes ;;
-esac
-if [ "$prebuild_status" -ne 0 ] && [ "$ended_on_sdk_lookup" = yes ]; then
+if [ "$prebuild_status" -ne 0 ]; then
+  case $error_line in
+    *'xcrun --sdk iphonesimulator --show-sdk-'*) ended_on_sdk_lookup=yes ;;
+  esac
+fi
+if [ "$ended_on_sdk_lookup" = yes ]; then
   if [ "$patched" = yes ]; then
     echo "one prebuild patched android/ and still ended on an iOS simulator SDK lookup"
   else
