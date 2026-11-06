@@ -7,6 +7,9 @@ export default defineConfig({
       web: {
         defaultRenderMode: 'ssg',
       },
+      native: {
+        bundler: 'metro',
+      },
     }),
   ],
 })
