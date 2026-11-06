@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # On a Mac whose developer directory is the Command Line Tools, xcrun runs but finds no iOS SDK, and `one prebuild`
-# without --platform stops in its iOS SDK step before it patches android/. Run it on a Mac with only the Command Line
-# Tools, or on one with Xcode as `DEVELOPER_DIR=/Library/Developer/CommandLineTools bash repro/reproduce.sh`. The
-# script builds the workspace, installs repro/ in a folder outside it from the workspace's packed packages
-# (use-workspace-packages.mjs), runs `one prebuild` there and reads android/'s MainActivity.kt for One's patches.
-# Exits 1 while `one prebuild` fails on the iOS simulator SDK lookup and MainActivity.kt names neither
-# RNScreensFragmentFactory nor OneLaunchScreen; 0 once it names both; 2 when the host is not such a Mac, a step before
-# `one prebuild` fails, or the result is neither.
+# without --platform ends on its iOS simulator SDK lookup. Run it on a Mac with only the Command Line Tools, or on one
+# with Xcode as `DEVELOPER_DIR=/Library/Developer/CommandLineTools bash repro/reproduce.sh`. The script builds the
+# workspace, installs repro/ in a folder outside it from the workspace's packed packages (use-workspace-packages.mjs),
+# runs `one prebuild` there and counts the lines of android/'s MainActivity.kt that name RNScreensFragmentFactory and
+# OneLaunchScreen; then, as a control, it runs `one prebuild --platform android` on a clean copy and counts them again.
+# Exits 1 while `one prebuild` ends on the iOS simulator SDK lookup; 0 once it patches android/ and does not end on that
+# lookup; 2 when the host is not such a Mac, a step before `one prebuild` fails, the control leaves android/ unpatched,
+# or `one prebuild` ends another way.
 set -Eeuo pipefail
 trap 'echo "failed: $BASH_COMMAND" >&2; exit 2' ERR
 system=$(uname -s)
@@ -46,41 +47,83 @@ tar -C repro --exclude=./node_modules --exclude=./tmp --exclude=./android --excl
 node repro/use-workspace-packages.mjs "$app"
 cd "$app"
 bun install
-package=$(node -p "require('./app.json').expo.android.package")
-activity=android/app/src/main/java/${package//.//}/MainActivity.kt
 
-prebuild_status=0
-NO_COLOR=1 node node_modules/one/run.mjs prebuild > prebuild.log 2>&1 || prebuild_status=$?
+# Runs `one prebuild` with the arguments given on a copy without android/ and ios/, keeps its output in the log the
+# first argument names, and sets `status`, `activity` (the MainActivity.kt it generated, or nothing), and `screens` and
+# `launch_screen`, the counts of that file's lines naming RNScreensFragmentFactory and OneLaunchScreen.
+prebuild() {
+  local log=$1
+  shift
+  rm -rf android ios
+  status=0
+  NO_COLOR=1 node node_modules/one/run.mjs prebuild "$@" > "$log" 2>&1 || status=$?
+  activity=
+  screens=0
+  launch_screen=0
+  if [ -d android/app/src/main/java ]; then
+    activity=$(find android/app/src/main/java -name MainActivity.kt)
+  fi
+  local activities=0
+  [ -z "$activity" ] || activities=$(printf '%s\n' "$activity" | wc -l)
+  if [ "$activities" -eq 1 ]; then
+    screens=$(grep -c RNScreensFragmentFactory "$activity" || true)
+    launch_screen=$(grep -c OneLaunchScreen "$activity" || true)
+  else
+    activity=
+  fi
+}
+
+prebuild prebuild.log
 cat prebuild.log
+prebuild_status=$status
+prebuild_activity=$activity
+prebuild_screens=$screens
+prebuild_launch_screen=$launch_screen
+error_line=$(grep -m1 ' ERROR ' prebuild.log || true)
+prebuild control.log --platform android
+rm -rf android ios
 
 echo
 echo "\$ xcrun --sdk iphonesimulator --show-sdk-path"
-echo "$sdk_output"
+echo "${sdk_output%%$'\n'*}"
 echo "exit code: $sdk_status"
 echo "\$ one prebuild"
 echo "exit code: $prebuild_status"
-error_line=$(grep -m1 ' ERROR ' prebuild.log || true)
 [ -z "$error_line" ] || echo "$error_line"
-sdk_error=$(grep -m1 'SDK "iphonesimulator" cannot be located' prebuild.log || true)
-[ -z "$sdk_error" ] || echo "$sdk_error"
-screens=0
-launch_screen=0
-if [ -f "$activity" ]; then
-  screens=$(grep -c RNScreensFragmentFactory "$activity" || true)
-  launch_screen=$(grep -c OneLaunchScreen "$activity" || true)
-  echo "MainActivity.kt lines naming RNScreensFragmentFactory: $screens"
-  echo "MainActivity.kt lines naming OneLaunchScreen: $launch_screen"
+if [ -n "$prebuild_activity" ]; then
+  echo "MainActivity.kt lines naming RNScreensFragmentFactory: $prebuild_screens"
+  echo "MainActivity.kt lines naming OneLaunchScreen: $prebuild_launch_screen"
 else
-  echo "$activity: missing"
+  echo "MainActivity.kt: not generated"
 fi
+echo "\$ one prebuild --platform android"
+echo "exit code: $status"
+echo "MainActivity.kt lines naming RNScreensFragmentFactory: $screens"
+echo "MainActivity.kt lines naming OneLaunchScreen: $launch_screen"
 
-if [ "$screens" -gt 0 ] && [ "$launch_screen" -gt 0 ]; then
-  echo "android/ carries One's patches"
-  exit 0
+if [ "$screens" -eq 0 ] || [ "$launch_screen" -eq 0 ]; then
+  echo "the control, one prebuild --platform android, did not patch android/"
+  exit 2
 fi
-if [ "$prebuild_status" -ne 0 ] && [ -n "$sdk_error" ] && [ "$screens" -eq 0 ] && [ "$launch_screen" -eq 0 ]; then
-  echo "one prebuild stopped in the iOS SDK step before it patched android/"
+patched=no
+if [ -n "$prebuild_activity" ] && [ "$prebuild_screens" -gt 0 ] && [ "$prebuild_launch_screen" -gt 0 ]; then
+  patched=yes
+fi
+ended_on_sdk_lookup=no
+case $error_line in
+  *'xcrun --sdk iphonesimulator --show-sdk-path'*) ended_on_sdk_lookup=yes ;;
+esac
+if [ "$prebuild_status" -ne 0 ] && [ "$ended_on_sdk_lookup" = yes ]; then
+  if [ "$patched" = yes ]; then
+    echo "one prebuild patched android/ and still ended on the iOS simulator SDK lookup"
+  else
+    echo "one prebuild ended on the iOS simulator SDK lookup before it patched android/"
+  fi
   exit 1
+fi
+if [ "$patched" = yes ] && [ "$ended_on_sdk_lookup" = no ]; then
+  echo "one prebuild patched android/ and did not end on the iOS simulator SDK lookup"
+  exit 0
 fi
 echo "one prebuild ended another way"
 exit 2
