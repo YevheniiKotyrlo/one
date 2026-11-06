@@ -206,7 +206,7 @@ try {
 
   await run('bun', ['install'], { cwd: checkout })
   await run('bun', ['run', 'build'], { cwd: checkout })
-  workspace = mkdtempSync(join(tmpdir(), 'one-console-repro-'))
+  workspace = mkdtempSync(join(tmpdir(), 'ocr-'))
   const app = join(workspace, 'app')
   const source = join(checkout, 'repro')
   const generated = new Set(['node_modules', 'tmp', 'android', 'ios', 'dist', '.yarn', 'yarn.lock'])
