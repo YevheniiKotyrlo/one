@@ -2,7 +2,8 @@
 # Native bundling leaves Rolldown's own output, dist/__virtual-native-entry.js, beside what One writes to build.outDir
 # (out/ in this app): `one build --platform android` does, and so does `one dev` when it bundles for Android.
 # The Android build also prints the MODULE_LEVEL_DIRECTIVE warnings that the web build filters out.
-# Exits 1 while dist/ is written, 0 once it is not, and 2 when a setup step fails.
+# Exits 1 while dist/ is written or the Android build prints those warnings, 0 once neither happens, and 2 when a
+# setup step fails.
 set -Eeuo pipefail
 trap 'echo "failed: $BASH_COMMAND" >&2; exit 2' ERR
 cd "$(dirname "$0")/.."
@@ -61,7 +62,6 @@ for ((second = 0; second < 120; second++)); do
   if ! kill -0 "$server" 2> /dev/null; then
     cat tmp/dev.log
     echo "one dev exited" >&2
-    [ "$PPID" != 1 ] || echo "this script runs as a child of PID 1, and vxrn's setupOrphanDetection ends one dev when its parent or grandparent is PID 1; in a container, run it with --init" >&2
     exit 2
   fi
   answer=$(get / 30 tmp/response.txt)
@@ -80,4 +80,12 @@ summary+=("$dist_listing")
 
 echo
 printf '%s\n' "${summary[@]}"
-[ "$written" = 0 ] || exit 1
+findings=()
+[ "$written" = 0 ] || findings+=('Rolldown writes dist/')
+[ "$android_warnings" = 0 ] || findings+=("the Android build prints $android_warnings MODULE_LEVEL_DIRECTIVE warnings")
+if [ "${#findings[@]}" = 0 ]; then
+  echo 'native bundling writes no dist/ and prints no MODULE_LEVEL_DIRECTIVE warning'
+  exit 0
+fi
+if [ "${#findings[@]}" = 2 ]; then echo "${findings[0]}, and ${findings[1]}"; else echo "${findings[0]}"; fi
+exit 1
