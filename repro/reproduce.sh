@@ -18,8 +18,9 @@ awk '/::performVoidMethodInvocation\(/ { inside = 1 }
   printing { printf "%d: %s\n", NR, $0 }
   printing && /@finally/ { exit }' \
   "$rn"/ReactCommon/react/nativemodule/core/platform/ios/ReactCommon/RCTTurboModule.mm > tmp/void-catch.txt
+react_native_version=$(node -p "require('react-native/package.json').version")
 echo
-echo "react-native $(node -p "require('react-native/package.json').version")"
+echo "react-native $react_native_version"
 echo 'one patch --force printed for react-native:'
 grep -E 'patch for react-native |^ +[^ ]+ react-native$' tmp/patch.log | uncolor || true
 echo 'the @catch block of performVoidMethodInvocation in RCTTurboModule.mm:'
