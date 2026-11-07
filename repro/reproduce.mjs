@@ -1,16 +1,16 @@
 // In Vite mode, an Android app's console.log never reaches logcat. repro/ is an app on this checkout's one
 // (`workspace:*`) whose app/index.tsx calls console.log('repro-console-line') and then writes 'repro-hook-line' to
 // logcat itself through the host's nativeLoggingHook. The script builds the workspace, installs repro/ in a folder
-// outside it from the workspace's packed packages (use-workspace-packages.mjs), starts `one dev`, and builds and
-// installs the app for the device's ABI with `one run:android`. It then launches the app, and once the app's hook line
-// is in logcat, stops it and reads the app's own logcat lines. It uninstalls the app and removes the port forward it
-// added before it prints the result.
+// outside it from the workspace's packed packages (use-workspace-packages.mjs), prebuilds the app's android/ and adds
+// androidx.activity to its app/build.gradle, starts `one dev`, and builds and installs the app for the device's ABI
+// with `one run:android`. It then launches the app, and once the app's hook line is in logcat, stops it and reads the
+// app's own logcat lines. It uninstalls the app and removes the port forward it added before it prints the result.
 // Needs an Android device or emulator; ANDROID_SERIAL names it when more than one is attached. From the checkout:
 // node repro/reproduce.mjs
 // Exits 1 while 'repro-console-line' is missing from the app's logcat lines before its hook line, 0 once it is there,
 // and 2 when a step fails, port 8081 is taken, or the app logs no hook line.
 import { spawn, spawnSync } from 'node:child_process'
-import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { release, tmpdir } from 'node:os'
 import { basename, join, relative, resolve, sep } from 'node:path'
@@ -20,6 +20,9 @@ import { createInterface } from 'node:readline'
 const port = 8081
 const consoleLine = 'repro-console-line'
 const hookLine = 'repro-hook-line'
+// `one prebuild` adds enableEdgeToEdge() to MainActivity.kt, which the app compiles only once it declares
+// androidx.activity itself: https://github.com/onejs/one/issues/1133.
+const activityDependency = 'androidx.activity:activity:1.9.3'
 const checkout = resolve(import.meta.dirname, '..')
 const sdk = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT
 const adb = sdk ? join(sdk, 'platform-tools', process.platform === 'win32' ? 'adb.exe' : 'adb') : 'adb'
@@ -219,6 +222,16 @@ try {
   await run('bun', ['install'], { cwd: app })
   applicationId = /applicationId: '([^']+)'/.exec(readFileSync(join(app, 'vite.config.ts'), 'utf8'))?.[1]
   if (!applicationId) throw new StepFailure('repro/vite.config.ts names no native.app.android.applicationId')
+  await run(process.execPath, [join(app, 'node_modules', 'one', 'run.mjs'), 'prebuild', '--platform', 'android'], {
+    cwd: app,
+    env: { ...env, NO_COLOR: '1', FORCE_COLOR: '0' },
+  })
+  const appGradle = join(app, 'android', 'app', 'build.gradle')
+  const gradle = readFileSync(appGradle, 'utf8')
+  const dependencies = /^dependencies \{$/m
+  if (!dependencies.test(gradle)) throw new StepFailure('android/app/build.gradle has no top-level dependencies block')
+  writeFileSync(appGradle, gradle.replace(dependencies, `$&\n    implementation("${activityDependency}")`))
+  console.log(`android/app/build.gradle: added implementation("${activityDependency}"), for onejs/one#1133`)
 
   const forwards = await read(adb, ['reverse', '--list'], { env })
   const alreadyForwarded = forwards
