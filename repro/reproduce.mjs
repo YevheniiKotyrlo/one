@@ -245,10 +245,12 @@ try {
       ...env,
       ORG_GRADLE_PROJECT_reactNativeArchitectures: abi,
       // gradlew's /bin/sh can drop a variable whose name has dots, so the Kotlin setting rides in GRADLE_OPTS.
+      // Each Kotlin compilation runs in a process of its own: a Kotlin daemon outlives the run, and compiling inside
+      // Gradle's JVM runs out of the 512 MiB metaspace the template's gradle.properties gives it.
       GRADLE_OPTS: [
         env.GRADLE_OPTS,
         '-Dorg.gradle.daemon=false',
-        '-Dorg.gradle.project.kotlin.compiler.execution.strategy=in-process',
+        '-Dorg.gradle.project.kotlin.compiler.execution.strategy=out-of-process',
       ]
         .filter(Boolean)
         .join(' '),
