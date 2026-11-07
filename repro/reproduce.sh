@@ -20,6 +20,8 @@ echo "$platform, node $node_version, bun $bun_version, $java_version, one checko
 bun install
 bun run build
 workspace=$(mktemp -d "${TMPDIR:-/tmp}/edge.XXXXXX")
+# Node and Gradle on Windows take the folder as Windows names it.
+if command -v cygpath > /dev/null; then workspace=$(cygpath -m "$workspace"); fi
 exit_status=0
 trap 'exit_status=$?; set +e; trap - ERR; rm -rf "$workspace" 2> /dev/null; exit "$exit_status"' EXIT
 app=$workspace/app
