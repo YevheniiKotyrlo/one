@@ -20,6 +20,8 @@ node_version=$(node --version)
 bun_version=$(bun --version)
 java_version=$(java -version 2>&1)
 java_version=${java_version%%$'\n'*}
+# Windows' java ends each line with a carriage return.
+java_version=${java_version%$'\r'}
 cd "$(dirname "$0")/.."
 revision=$(git rev-parse --short HEAD)
 echo "$platform, node $node_version, bun $bun_version, $java_version, one checkout at $revision"
