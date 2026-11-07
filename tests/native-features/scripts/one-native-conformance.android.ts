@@ -189,9 +189,9 @@ function commandError(command: string, args: string[], error: unknown) {
     message?: string
   }
   const detail =
+    result.message ||
     result.stderr?.toString() ||
     result.stdout?.toString() ||
-    result.message ||
     'unknown error'
   return new Error(`${command} ${args.join(' ')} failed: ${detail}`)
 }
@@ -6223,7 +6223,7 @@ async function run(config: Config) {
           'Ticks: '.length
         ) ?? -1
       )
-    await expect(
+    const gpuPainted = await expect(
       'gpu-panes-painted',
       (nodes) =>
         diagnose(nodes, [
@@ -6233,7 +6233,7 @@ async function run(config: Config) {
         ]),
       'one-native-gpu-screen'
     )
-    const gpuBefore = gpuTicks(dumpNodes(config).nodes)
+    const gpuBefore = gpuTicks(gpuPainted.nodes)
     await expect(
       'gpu-fiber-loop-ticks',
       (nodes) => gpuTicks(nodes) > gpuBefore,
