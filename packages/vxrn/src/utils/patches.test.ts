@@ -1,6 +1,6 @@
-import FSExtra from 'fs-extra'
 import { join } from 'node:path'
-import { mkdtemp, rm, symlink } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { readJSON } from './fs'
 import { tmpdir } from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -11,6 +11,7 @@ vi.mock('@vxrn/compiler', () => ({ transformSWC: vi.fn() }))
 vi.mock('@vxrn/vite-flow', () => ({ transformFlowBabel: vi.fn() }))
 
 import { transformSWC } from '@vxrn/compiler'
+import { builtInDepPatches } from '../patches/builtInDepPatches'
 import {
   type DepPatch,
   applyDependencyPatches,
@@ -55,7 +56,7 @@ describe('applyDependencyPatches', () => {
     setupFs: (nmDir: string) => Promise<void>
   }) {
     const nmDir = join(tmpDir, 'node_modules')
-    await FSExtra.ensureDir(nmDir)
+    await mkdir(nmDir, { recursive: true })
     await opts.setupFs(nmDir)
     await applyDependencyPatches(opts.patches, { root: tmpDir })
     return nmDir
@@ -90,8 +91,8 @@ describe('applyDependencyPatches', () => {
           '@react-navigation',
           'core'
         )
-        await FSExtra.ensureDir(storePkgDir)
-        await FSExtra.writeFile(
+        await mkdir(storePkgDir, { recursive: true })
+        await writeFile(
           join(storePkgDir, 'package.json'),
           makePkg('@react-navigation/core', '7.16.1')
         )
@@ -99,7 +100,7 @@ describe('applyDependencyPatches', () => {
     })
 
     // verify the patch was applied in the store
-    const patchedPkg = await FSExtra.readJSON(
+    const patchedPkg = await readJSON(
       join(
         nmDir,
         '.pnpm',
@@ -135,12 +136,12 @@ describe('applyDependencyPatches', () => {
       setupFs: async (nm) => {
         // create the real package in pnpm store
         const storeDir = join(nm, '.pnpm', 'test-pkg@1.0.0', 'node_modules', 'test-pkg')
-        await FSExtra.ensureDir(storeDir)
-        await FSExtra.writeFile(
+        await mkdir(storeDir, { recursive: true })
+        await writeFile(
           join(storeDir, 'package.json'),
           makePkg('test-pkg', '1.0.0')
         )
-        await FSExtra.writeFile(join(storeDir, 'index.js'), 'module.exports = {}')
+        await writeFile(join(storeDir, 'index.js'), 'module.exports = {}')
 
         // create symlink at top-level node_modules (like pnpm does when hoisted)
         const symlinkTarget = join(nm, 'test-pkg')
@@ -148,7 +149,7 @@ describe('applyDependencyPatches', () => {
 
         // also create .pnpm/node_modules hoisted symlink
         const pnpmHoisted = join(nm, '.pnpm', 'node_modules', 'test-pkg')
-        await FSExtra.ensureDir(join(nm, '.pnpm', 'node_modules'))
+        await mkdir(join(nm, '.pnpm', 'node_modules'), { recursive: true })
         await symlink(storeDir, pnpmHoisted, 'junction')
       },
     })
@@ -174,16 +175,16 @@ describe('applyDependencyPatches', () => {
       setupFs: async (nm) => {
         // standard flat node_modules layout, no .pnpm
         const pkgDir = join(nm, 'test-pkg')
-        await FSExtra.ensureDir(pkgDir)
-        await FSExtra.writeFile(
+        await mkdir(pkgDir, { recursive: true })
+        await writeFile(
           join(pkgDir, 'package.json'),
           makePkg('test-pkg', '1.0.0')
         )
-        await FSExtra.writeFile(join(pkgDir, 'index.js'), 'module.exports = {}')
+        await writeFile(join(pkgDir, 'index.js'), 'module.exports = {}')
       },
     })
 
-    const content = await FSExtra.readFile(join(nmDir, 'test-pkg', 'index.js'), 'utf-8')
+    const content = await readFile(join(nmDir, 'test-pkg', 'index.js'), 'utf-8')
     expect(content).toContain('// patched')
   })
 
@@ -203,29 +204,29 @@ describe('applyDependencyPatches', () => {
       setupFs: async (nm) => {
         // v1 store entry
         const v1Dir = join(nm, '.pnpm', 'test-pkg@1.0.0', 'node_modules', 'test-pkg')
-        await FSExtra.ensureDir(v1Dir)
-        await FSExtra.writeFile(join(v1Dir, 'package.json'), makePkg('test-pkg', '1.0.0'))
-        await FSExtra.writeFile(join(v1Dir, 'index.js'), 'module.exports = "v1"')
+        await mkdir(v1Dir, { recursive: true })
+        await writeFile(join(v1Dir, 'package.json'), makePkg('test-pkg', '1.0.0'))
+        await writeFile(join(v1Dir, 'index.js'), 'module.exports = "v1"')
 
         // v2 store entry
         const v2Dir = join(nm, '.pnpm', 'test-pkg@2.0.0', 'node_modules', 'test-pkg')
-        await FSExtra.ensureDir(v2Dir)
-        await FSExtra.writeFile(join(v2Dir, 'package.json'), makePkg('test-pkg', '2.0.0'))
-        await FSExtra.writeFile(join(v2Dir, 'index.js'), 'module.exports = "v2"')
+        await mkdir(v2Dir, { recursive: true })
+        await writeFile(join(v2Dir, 'package.json'), makePkg('test-pkg', '2.0.0'))
+        await writeFile(join(v2Dir, 'index.js'), 'module.exports = "v2"')
       },
     })
 
     const nmDir = join(tmpDir, 'node_modules')
 
     // v1 should be patched
-    const v1Content = await FSExtra.readFile(
+    const v1Content = await readFile(
       join(nmDir, '.pnpm', 'test-pkg@1.0.0', 'node_modules', 'test-pkg', 'index.js'),
       'utf-8'
     )
     expect(v1Content).toBe('// v1 patched')
 
     // v2 should NOT be patched
-    const v2Content = await FSExtra.readFile(
+    const v2Content = await readFile(
       join(nmDir, '.pnpm', 'test-pkg@2.0.0', 'node_modules', 'test-pkg', 'index.js'),
       'utf-8'
     )
@@ -252,15 +253,15 @@ describe('applyDependencyPatches', () => {
       setupFs: async (nm) => {
         // real package in store
         const storeDir = join(nm, '.pnpm', 'test-pkg@1.0.0', 'node_modules', 'test-pkg')
-        await FSExtra.ensureDir(storeDir)
-        await FSExtra.writeFile(
+        await mkdir(storeDir, { recursive: true })
+        await writeFile(
           join(storeDir, 'package.json'),
           makePkg('test-pkg', '1.0.0')
         )
-        await FSExtra.writeFile(join(storeDir, 'index.js'), 'module.exports = {}')
+        await writeFile(join(storeDir, 'index.js'), 'module.exports = {}')
 
         // hoisted symlink in .pnpm/node_modules
-        await FSExtra.ensureDir(join(nm, '.pnpm', 'node_modules'))
+        await mkdir(join(nm, '.pnpm', 'node_modules'), { recursive: true })
         await symlink(storeDir, join(nm, '.pnpm', 'node_modules', 'test-pkg'), 'junction')
       },
     })
@@ -268,7 +269,7 @@ describe('applyDependencyPatches', () => {
     expect(patchCallCount).toBe(1)
 
     // verify the file was actually patched
-    const content = await FSExtra.readFile(
+    const content = await readFile(
       join(nmDir, '.pnpm', 'test-pkg@1.0.0', 'node_modules', 'test-pkg', 'index.js'),
       'utf-8'
     )
@@ -295,12 +296,12 @@ describe('applyDependencyPatches', () => {
       patches: stale,
       setupFs: async (nm) => {
         const pkgDir = join(nm, 'test-pkg')
-        await FSExtra.ensureDir(pkgDir)
-        await FSExtra.writeFile(
+        await mkdir(pkgDir, { recursive: true })
+        await writeFile(
           join(pkgDir, 'package.json'),
           makePkg('test-pkg', '1.0.0')
         )
-        await FSExtra.writeFile(join(pkgDir, 'index.js'), 'module.exports = {}')
+        await writeFile(join(pkgDir, 'index.js'), 'module.exports = {}')
       },
     })
 
@@ -325,17 +326,48 @@ describe('applyDependencyPatches', () => {
       patches: applies,
       setupFs: async (nm) => {
         const pkgDir = join(nm, 'test-pkg')
-        await FSExtra.ensureDir(pkgDir)
-        await FSExtra.writeFile(
+        await mkdir(pkgDir, { recursive: true })
+        await writeFile(
           join(pkgDir, 'package.json'),
           makePkg('test-pkg', '1.0.0')
         )
-        await FSExtra.writeFile(join(pkgDir, 'index.js'), 'module.exports = {}')
+        await writeFile(join(pkgDir, 'index.js'), 'module.exports = {}')
       },
     })
 
     expect(warn.mock.calls.flat().join(' ')).not.toContain('stale')
     warn.mockRestore()
+  })
+
+  it('logs a throwing void TurboModule on both the old and 0.88 catch blocks', () => {
+    const path =
+      'ReactCommon/react/nativemodule/core/platform/ios/ReactCommon/RCTTurboModule.mm'
+    const logged =
+      'RCTLogError(@"Exception in %s.%s: %@", moduleName, methodNameStr.c_str(), exception.reason);'
+    const older = `    @try {
+      [inv invokeWithTarget:strongModule];
+    } @catch (NSException *exception) {
+      // Void methods are always async, re-throw instead of converting to
+      // JSError, same as the async branch in performMethodInvocation.
+      @throw exception;
+    } @finally {`
+    const current = older.replace(
+      '@throw exception;',
+      '@throw addModuleIdentityToException(exception, std::string{moduleName}, methodNameStr);'
+    )
+    const apply = (version: string, source: string) => {
+      const patch = builtInDepPatches.find(
+        (entry) => entry.module === 'react-native' && entry.patchFiles.version === version
+      )
+      const transform = patch?.patchFiles[path]
+      if (typeof transform !== 'function') throw new Error(version)
+      return transform(source)
+    }
+
+    expect(apply('>=0.86.0 <0.88.0', older)).toContain(logged)
+    expect(apply('>=0.86.0 <0.88.0', older)).not.toContain('@throw exception;')
+    expect(apply('>=0.88.0', current)).toContain(logged)
+    expect(apply('>=0.88.0', current)).not.toContain('@throw addModuleIdentityToException')
   })
 
   // a patch is written to node_modules once and then read by every later build,
@@ -352,12 +384,12 @@ describe('applyDependencyPatches', () => {
       patches: [{ module: 'test-pkg', patchFiles: { 'index.js': ['swc'] } }],
       setupFs: async (nm) => {
         const pkgDir = join(nm, 'test-pkg')
-        await FSExtra.ensureDir(pkgDir)
-        await FSExtra.writeFile(
+        await mkdir(pkgDir, { recursive: true })
+        await writeFile(
           join(pkgDir, 'package.json'),
           makePkg('test-pkg', '1.0.0')
         )
-        await FSExtra.writeFile(join(pkgDir, 'index.js'), 'export default () => <div />')
+        await writeFile(join(pkgDir, 'index.js'), 'export default () => <div />')
       },
     })
 
