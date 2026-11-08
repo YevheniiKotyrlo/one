@@ -1,6 +1,6 @@
-// `workspace-root <root> <app>` makes <root> a Bun workspace of the app in <app>, moving the app's overrides, which point
-// at its packed packages, to the root, where a workspace's overrides apply. `drop-dependencies <app> <name>...` removes
-// the named dependencies from the app's package.json.
+// `workspace-root <root> <app> [<member>...]` makes <root> a Bun workspace of the app in <app> and of each other member
+// folder named, moving the app's overrides, which point at its packed packages, to the root, where a workspace's
+// overrides apply. `drop-dependencies <app> <name>...` removes the named dependencies from the app's package.json.
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -11,14 +11,14 @@ const writeManifest = (folder, manifest) =>
 const [command, ...parameters] = process.argv.slice(2)
 switch (command) {
   case 'workspace-root': {
-    const [root, app] = parameters
+    const [root, app, ...members] = parameters
     const manifest = readManifest(app)
     const overrides = Object.fromEntries(
       Object.entries(manifest.overrides).map(([name, path]) => [name, path.replace('file:./', 'file:./app/')])
     )
     delete manifest.overrides
     writeManifest(app, manifest)
-    writeManifest(root, { name: 'workspace', private: true, workspaces: ['app'], overrides })
+    writeManifest(root, { name: 'workspace', private: true, workspaces: ['app', ...members], overrides })
     break
   }
   case 'drop-dependencies': {

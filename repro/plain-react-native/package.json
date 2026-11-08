@@ -1,0 +1,18 @@
+{
+  "name": "plain-react-native",
+  "private": true,
+  "dependencies": {
+    "@react-navigation/native": "8.0.0-alpha.51",
+    "@react-navigation/native-stack": "8.0.0-alpha.59",
+    "react": "19.3.0",
+    "react-native": "0.88.0",
+    "react-native-safe-area-context": "~5.8.1",
+    "react-native-screens": "~4.30.0"
+  },
+  "devDependencies": {
+    "@react-native-community/cli": "^20.2.0",
+    "@react-native/metro-config": "^0.88.0",
+    "metro": "^0.87.1",
+    "metro-config": "^0.87.1"
+  }
+}

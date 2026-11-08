@@ -16,11 +16,16 @@
 #                  declares optional peers; exits 1 while the bundle cannot resolve either, 0 once it bundles
 #   no-tsconfig    the app has no tsconfig.json; exits 1 while its config fails to load with "tsconfig.json paths could
 #                  not be loaded", 0 once it bundles
+#   isolated-dependency  the app, in a Bun workspace with the isolated linker that links one's own packages and
+#                  Rolldown at its root, does not list @react-navigation/elements, bottom-tabs or native-stack, which
+#                  one depends on; beside it, plain-react-native bundles @react-navigation/native-stack on React
+#                  Native's default Metro config; exits 1 while the One app cannot resolve one of them from one's
+#                  files, 0 once it bundles
 # Every case exits 2 when a step fails or the bundle fails another way. Given several cases, it runs them in the order
 # named and exits with the highest status.
 set -Eeuo pipefail
 trap 'echo "failed: $BASH_COMMAND" >&2; exit 2' ERR
-known_cases=(watch-folders patches watcher isolated optional-peer no-tsconfig)
+known_cases=(watch-folders patches watcher isolated optional-peer no-tsconfig isolated-dependency)
 if [ $# -eq 0 ]; then
   echo "usage: reproduce.sh <case>..., a case being one of: ${known_cases[*]}" >&2
   exit 2
@@ -45,7 +50,8 @@ export NO_COLOR=1
 template=$scratch/template
 mkdir "$template"
 tar -C repro --exclude=./node_modules --exclude=./tmp --exclude=./yarn.lock --exclude=./reproduce.sh \
-  --exclude=./run-in-docker.sh --exclude=./use-workspace-packages.mjs --exclude=./count-file-watchers.cjs --exclude=./edit-manifests.mjs -cf - . |
+  --exclude=./run-in-docker.sh --exclude=./use-workspace-packages.mjs --exclude=./count-file-watchers.cjs --exclude=./edit-manifests.mjs \
+  --exclude=./plain-react-native -cf - . |
   tar -C "$template" -xf -
 node repro/use-workspace-packages.mjs "$template"
 
@@ -234,6 +240,46 @@ no_tsconfig() {
   verdict=1
 }
 
+isolated_dependency() {
+  local root=$scratch/isolated-dependency app=$scratch/isolated-dependency/app
+  local plain=$scratch/isolated-dependency/plain-react-native one_folder linked node_resolved unresolved
+  copy_app "$app"
+  cp -R "$repro/plain-react-native" "$plain"
+  node "$repro/edit-manifests.mjs" drop-dependencies "$app" @react-navigation/elements @react-navigation/bottom-tabs \
+    @react-navigation/native-stack
+  node "$repro/edit-manifests.mjs" workspace-root "$root" "$app" plain-react-native
+  printf '[install]\nlinker = "isolated"\npublicHoistPattern = ["@vxrn/*", "rolldown"]\n' > "$root/bunfig.toml"
+  install_app "$root"
+  one_folder=$(cd "$app/node_modules/one" && pwd -P)
+  linked=no
+  [ ! -e "$one_folder/../@react-navigation/elements/package.json" ] || linked=yes
+  node_resolved=$(node -e 'console.log(require.resolve("@react-navigation/elements", { paths: [process.argv[1]] }))' \
+    "$one_folder" 2>&1 || true)
+  echo "isolated-dependency: one is installed at ${one_folder//$scratch/<scratch>};" \
+    "@react-navigation/elements linked beside it: $linked; Node resolves it from one's folder to" \
+    "${node_resolved//$scratch/<scratch>}"
+  mkdir -p "$plain/out"
+  (cd "$plain" && timeout 1500 node bundle.js) > "$plain/bundle.log" 2>&1 ||
+    fail "$plain" "isolated-dependency: the plain React Native app failed to bundle"
+  [ -s "$plain/out/index.android.js" ] || fail "$plain" "isolated-dependency: the plain app wrote no bundle"
+  grep -q HeaderHeightContext "$plain/out/index.android.js" ||
+    fail "$plain" "isolated-dependency: the plain app's bundle lacks @react-navigation/elements' HeaderHeightContext"
+  echo "isolated-dependency: the plain React Native app, through Metro's runBuild on React Native's default config watching the" \
+    "workspace root, bundled @react-navigation/native-stack and the @react-navigation/elements it depends on"
+  bundle "$app"
+  if [ "$bundled" = yes ]; then
+    echo "isolated-dependency: the One app, without @react-navigation/elements, bottom-tabs and native-stack, bundled"
+    verdict=0
+    return
+  fi
+  unresolved=$(grep -o -m1 'Unable to resolve module @react-navigation/[a-z-]* from [^:]*/one/[^:]*' \
+    "$app/bundle.log" || true)
+  [ -n "$unresolved" ] || fail "$app" "isolated-dependency: the One app's bundle failed another way"
+  echo "isolated-dependency: the One app, without @react-navigation/elements, bottom-tabs and native-stack, which" \
+    "one depends on, failed to bundle: ${unresolved//$scratch/<scratch>}"
+  verdict=1
+}
+
 highest=0
 for name in "$@"; do
   verdict=2
@@ -244,6 +290,7 @@ for name in "$@"; do
     isolated) isolated ;;
     optional-peer) optional_peer ;;
     no-tsconfig) no_tsconfig ;;
+    isolated-dependency) isolated_dependency ;;
   esac
   [ "$verdict" -le "$highest" ] || highest=$verdict
 done
