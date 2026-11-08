@@ -94,9 +94,11 @@ errors_by_package() {
     | sort | uniq -c | sort -k1,1nr -k2,2 | awk '{ printf "%s%s %s", (NR > 1 ? ", " : ""), $2, $1 }'
 }
 
-# Prints the errors tsc reports in the declarations of the package the second argument names.
+# Prints the errors tsc reports in the declarations of the package the second argument names, the run's folder named
+# <workspace>.
 package_errors() {
-  grep -E "^node_modules/$2/[^(]*\\([0-9]+,[0-9]+\\): error TS" "$workspace/$1.diagnostics" || true
+  grep -E "^node_modules/$2/[^(]*\\([0-9]+,[0-9]+\\): error TS" "$workspace/$1.diagnostics" | sed "s|$workspace|<workspace>|g" \
+    || true
 }
 
 # Prints its arguments' lines, leaving out the empty ones.
