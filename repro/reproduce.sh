@@ -5,10 +5,11 @@
 # (use-workspace-packages.mjs), and type-checks two programs there with skipLibCheck off: tsconfig.native.json, the
 # routes in app/ as a React Native app checks them (lib ESNext without the DOM, types [], the react-native condition),
 # and tsconfig.vite.json, vite.config.ts with Node's types. For each it prints the declarations it reads from the other
-# program's packages, why it reads them (tsc --explainFiles), and the errors tsc reports in one's own declarations.
+# program's packages, why it reads them (tsc --explainFiles), its errors by the package that declares them, and its
+# errors in the declarations of one and of @vxrn/compiler, which import @babel/core's types without @types/babel__core.
 # Exits 1 while the React Native program reads @types/node or vite, the Vite program reads react-native, or either
-# reports an error in one's declarations; 0 once neither reads the other's packages and neither reports an error in
-# one's; 2 when a step before the check fails or tsc cannot check a program.
+# reports an error in one's or @vxrn/compiler's declarations; 0 once neither reads the other's packages and neither
+# reports an error in those; 2 when a step before the check fails or tsc cannot check a program.
 set -Eeuo pipefail
 trap 'echo "failed: $BASH_COMMAND" >&2; exit 2' ERR
 platform=$(uname -sr)
@@ -78,16 +79,26 @@ errors_by_package() {
     | sort | uniq -c | sort -k1,1nr -k2,2 | awk '{ printf "%s%s %s", (NR > 1 ? ", " : ""), $2, $1 }'
 }
 
-one_errors() {
-  grep -E '^node_modules/one/[^(]*\([0-9]+,[0-9]+\): error TS' "$workspace/$1.diagnostics" || true
+# Prints the errors tsc reports in the declarations of the package the second argument names.
+package_errors() {
+  grep -E "^node_modules/$2/[^(]*\\([0-9]+,[0-9]+\\): error TS" "$workspace/$1.diagnostics" || true
+}
+
+# Prints its arguments' lines, leaving out the empty ones.
+join_lines() {
+  printf '%s\n' "$@" | sed '/^$/d'
 }
 
 check_program tsconfig.native.json
 check_program tsconfig.vite.json
 native_foreign=$(foreign_packages tsconfig.native.json '@types/node|vite')
 vite_foreign=$(foreign_packages tsconfig.vite.json 'react-native')
-native_one_errors=$(one_errors tsconfig.native.json)
-vite_one_errors=$(one_errors tsconfig.vite.json)
+native_one_errors=$(package_errors tsconfig.native.json one)
+vite_one_errors=$(package_errors tsconfig.vite.json one)
+native_compiler_errors=$(package_errors tsconfig.native.json @vxrn/compiler)
+vite_compiler_errors=$(package_errors tsconfig.vite.json @vxrn/compiler)
+native_package_errors=$(join_lines "$native_one_errors" "$native_compiler_errors")
+vite_package_errors=$(join_lines "$vite_one_errors" "$vite_compiler_errors")
 
 report_program() {
   local config=$1 description=$2 packages=$3 foreign=$4 errors=$5
@@ -109,21 +120,22 @@ report_program() {
 echo
 echo "$typescript_version"
 report_program tsconfig.native.json "app/, lib ESNext without the DOM, types [], the react-native condition" \
-  '@types/node and vite' "$native_foreign" "$native_one_errors" \
+  '@types/node and vite' "$native_foreign" "$native_package_errors" \
   'node_modules/@types/node/index.d.ts:1' 'node_modules/vite/dist/node/index.d.ts:2' \
   'node_modules/one/types/vite/types.d.ts:8'
 report_program tsconfig.vite.json "vite.config.ts with Node's types" \
-  'react-native' "$vite_foreign" "$vite_one_errors" \
+  'react-native' "$vite_foreign" "$vite_package_errors" \
   'node_modules/react-native/types_generated/index.d.ts:1' 'node_modules/one/types/interfaces/router.d.ts:1'
 
-if [ -z "$native_foreign$vite_foreign$native_one_errors$vite_one_errors" ]; then
-  echo "neither program reads the other's declarations, and neither reports an error in one's declarations"
+if [ -z "$native_foreign$vite_foreign$native_one_errors$vite_one_errors$native_compiler_errors$vite_compiler_errors" ]; then
+  echo "neither program reads the other's declarations, and neither reports an error in one's or @vxrn/compiler's declarations"
   exit 0
 fi
 problems=()
 [ -z "$native_foreign" ] || problems+=("the React Native program reads Node's and Vite's declarations")
 [ -z "$vite_foreign" ] || problems+=("the Vite program reads React Native's")
 [ -z "$native_one_errors$vite_one_errors" ] || problems+=("tsc reports errors in one's declarations")
+[ -z "$native_compiler_errors$vite_compiler_errors" ] || problems+=("tsc reports errors in @vxrn/compiler's declarations")
 summary=$(printf '%s; ' "${problems[@]}")
 echo "${summary%; }"
 exit 1
