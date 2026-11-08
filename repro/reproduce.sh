@@ -5,12 +5,12 @@
 # (use-workspace-packages.mjs), and type-checks tsconfig.nodenext.json there (module and moduleResolution NodeNext,
 # Node's types): vite.config.ts, which imports `one/vite`, and nodenext-packages.ts, which imports the types of `vxrn`
 # and `@vxrn/compiler` that one/vite's declarations import. For each of the checkout's packages it prints how many of
-# its declaration files the program reads and how many relative imports without an extension tsc reports in them
-# (TS2834, TS2835), with the first; then how many other errors tsc reports in them.
-# Exits 1 while tsc reports a relative import without an extension in a declaration of one, vxrn or @vxrn/*; 0 once it
-# reports none; 2 when a step before the check fails, tsc cannot check the program (it exits other than 0 or 1, prints
-# what is not a diagnostic of a file, or reports a configuration error), the program reads none of one's declarations,
-# or vite.config.ts or nodenext-packages.ts fails.
+# its declaration files the program reads, its relative imports without an extension (TS2834, TS2835) and those that
+# name no file (TS2307, TS2792), with the first; then how many other errors tsc reports in them.
+# Exits 1 while tsc reports a relative import without an extension, or one naming no file, in a declaration of one,
+# vxrn or @vxrn/*; 0 once it reports none; 2 when a step before the check fails, tsc cannot check the program (it exits
+# other than 0 or 1, prints what is not a diagnostic of a file, or reports a configuration error), the program reads
+# none of one's declarations, or vite.config.ts or nodenext-packages.ts fails.
 set -Eeuo pipefail
 trap 'echo "failed: $BASH_COMMAND" >&2; exit 2' ERR
 platform=$(uname -sr)
@@ -60,24 +60,27 @@ fi
 run_tsc files -p tsconfig.nodenext.json --listFilesOnly
 checkout_package='(one|vxrn|@vxrn/[^/]+)'
 source_errors=$(grep -E '^(vite\.config|nodenext-packages)\.ts\([0-9]+,[0-9]+\): error TS' "$workspace/diagnostics" || true)
-extension_errors=$(grep -E "^node_modules/$checkout_package/[^(]*\\([0-9]+,[0-9]+\\): error TS283[45]: " \
-  "$workspace/diagnostics" || true)
-other_count=$(grep -E "^node_modules/$checkout_package/[^(]*\\([0-9]+,[0-9]+\\): error TS" "$workspace/diagnostics" \
-  | grep -vcE ': error TS283[45]: ' || true)
+package_errors=$(grep -E "^node_modules/$checkout_package/[^(]*\\([0-9]+,[0-9]+\\): error TS" "$workspace/diagnostics" || true)
+# A relative import without an extension (TS2834, TS2835), or with one that names no file (TS2307, TS2792).
+unresolved_pattern=": error (TS283[45]: |TS(2307|2792): Cannot find module '\\.\\.?/)"
+unresolved_errors=$(printf '%s' "$package_errors" | grep -E "$unresolved_pattern" || true)
+other_count=$(printf '%s' "$package_errors" | grep -vcE "$unresolved_pattern" || true)
 
 # Prints, for each of the checkout's packages the program reads or reports an error in, its declaration files read, its
-# relative imports without an extension and the first of them.
+# relative imports without an extension by code, its relative imports that name no file, and the first of them.
 report_packages() {
-  local packages package files count first
+  local packages package files without_extension_2834 without_extension_2835 naming_no_file first
   packages=$( {
     sed -n 's|^.*/node_modules/||p' "$workspace/files"
-    printf '%s\n' "$extension_errors" | sed -n 's|^node_modules/||p'
+    printf '%s\n' "$unresolved_errors" | sed -n 's|^node_modules/||p'
   } | awk -F/ '{ print ($1 ~ /^@/) ? $1 "/" $2 : $1 }' | grep -xE "$checkout_package" | sort -u || true)
   for package in $packages; do
     files=$(grep -c "/node_modules/$package/" "$workspace/files" || true)
-    count=$(printf '%s\n' "$extension_errors" | grep -c "^node_modules/$package/" || true)
-    echo "$package: $files declaration files read, $count relative imports without an extension"
-    first=$(printf '%s\n' "$extension_errors" | grep -m1 "^node_modules/$package/" || true)
+    without_extension_2834=$(printf '%s' "$unresolved_errors" | grep -c "^node_modules/$package/.*: error TS2834: " || true)
+    without_extension_2835=$(printf '%s' "$unresolved_errors" | grep -c "^node_modules/$package/.*: error TS2835: " || true)
+    naming_no_file=$(printf '%s' "$unresolved_errors" | grep -cE "^node_modules/$package/.*: error TS(2307|2792): " || true)
+    echo "$package: $files declaration files read; relative imports without an extension: $without_extension_2834 TS2834, $without_extension_2835 TS2835; relative imports naming no file: $naming_no_file"
+    first=$(printf '%s' "$unresolved_errors" | grep -m1 "^node_modules/$package/" || true)
     [ -z "$first" ] || echo "  $first"
   done
 }
@@ -97,10 +100,10 @@ if [ -n "$source_errors" ]; then
   echo "vite.config.ts or nodenext-packages.ts fails"
   exit 2
 fi
-extension_count=$(printf '%s' "$extension_errors" | grep -c . || true)
-if [ "$extension_count" -eq 0 ]; then
-  echo "the declarations of one, vxrn and @vxrn/* import no relative path without an extension under nodenext"
+unresolved_count=$(printf '%s' "$unresolved_errors" | grep -c . || true)
+if [ "$unresolved_count" -eq 0 ]; then
+  echo "every relative import in the declarations of one, vxrn and @vxrn/* resolves to a file under nodenext"
   exit 0
 fi
-echo "the declarations of one, vxrn and @vxrn/* import $extension_count relative paths without an extension, which nodenext cannot resolve"
+echo "the declarations of one, vxrn and @vxrn/* hold $unresolved_count relative imports that nodenext resolves to no file"
 exit 1
