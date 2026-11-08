@@ -25,6 +25,9 @@ bun run build
 workspace=$(mktemp -d "${TMPDIR:-/tmp}/declarations.XXXXXX")
 # Node and bun on Windows take the folder as Windows names it.
 if command -v cygpath > /dev/null; then workspace=$(cygpath -m "$workspace"); fi
+# tsc prints the folder with its links resolved: /private/var/… on macOS for mktemp's /var/….
+workspace_resolved=$(cd "$workspace" && pwd -P)
+if command -v cygpath > /dev/null; then workspace_resolved=$(cygpath -m "$workspace_resolved"); fi
 exit_status=0
 trap 'exit_status=$?; set +e; trap - ERR; rm -rf "$workspace" 2> /dev/null; exit "$exit_status"' EXIT
 app=$workspace/app
@@ -74,13 +77,18 @@ foreign_packages() {
     | grep -xE "$pattern" | sort | uniq -c | awk '{ printf "%s (%s files)\n", $2, $1 }' || true
 }
 
-# Prints the file and, under it, the first reasons tsc --explainFiles gives for reading it, without package ids, and how
-# many more it gives.
+# Prints the file and, under it, the first files tsc --explainFiles names as importing or referencing it, without
+# package ids, and how many more it names.
 explain_file() {
   local config=$1 file=$2 limit=$3
   awk -v file="$file" -v limit="$limit" '
     $0 == file { reading = 1; print file; next }
-    reading && /^   / { if (shown++ < limit) { sub(/ with packageId .*$/, ""); sub(/^ +/, "    "); print } next }
+    reading && /^   / {
+      if ($0 ~ /(Imported|referenced) via /) {
+        if (shown++ < limit) { sub(/ with packageId .*$/, ""); sub(/^ +/, "    "); print }
+      }
+      next
+    }
     reading { reading = 0 }
     END { if (shown > limit) printf "    and %d more\n", shown - limit }
   ' "$workspace/$config.explained"
@@ -97,8 +105,8 @@ errors_by_package() {
 # Prints the errors tsc reports in the declarations of the package the second argument names, the run's folder named
 # <workspace>.
 package_errors() {
-  grep -E "^node_modules/$2/[^(]*\\([0-9]+,[0-9]+\\): error TS" "$workspace/$1.diagnostics" | sed "s|$workspace|<workspace>|g" \
-    || true
+  grep -E "^node_modules/$2/[^(]*\\([0-9]+,[0-9]+\\): error TS" "$workspace/$1.diagnostics" \
+    | sed -e "s|$workspace_resolved|<workspace>|g" -e "s|$workspace|<workspace>|g" || true
 }
 
 # Prints its arguments' lines, leaving out the empty ones.
@@ -113,7 +121,8 @@ require_one() {
     echo "$config reads none of one's declarations"
     exit 2
   fi
-  if grep -E "^(app/|vite\\.config\\.ts)[^(]*\\([0-9]+,[0-9]+\\): error TS(2305|2307): .*'one(/vite)?'" \
+  # tsc names a module it cannot find as 'one' (TS2307), and one that lacks an export as '"one"' (TS2305).
+  if grep -E "^(app/|vite\\.config\\.ts)[^(]*\\([0-9]+,[0-9]+\\): error (TS2307: .*'one(/vite)?'|TS2305: Module '\"one(/vite)?\"')" \
     "$workspace/$config.diagnostics"; then
     echo "$config cannot import one"
     exit 2
