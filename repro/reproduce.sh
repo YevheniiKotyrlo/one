@@ -70,6 +70,14 @@ explain_file() {
   ' "$workspace/$config.explained"
 }
 
+# Prints "<package> <count>" for each package whose declarations tsc reports errors in, the most first, and "app <count>"
+# for the app's own files.
+errors_by_package() {
+  sed -n 's/^\(.*\)([0-9]*,[0-9]*): error TS[0-9]*:.*$/\1/p' "$workspace/$1.diagnostics" \
+    | awk -F/ '{ if ($1 != "node_modules") print "app"; else print ($2 ~ /^@/) ? $2 "/" $3 : $2 }' \
+    | sort | uniq -c | sort -k1,1nr -k2,2 | awk '{ printf "%s%s %s", (NR > 1 ? ", " : ""), $2, $1 }'
+}
+
 one_errors() {
   grep -E '^node_modules/one/[^(]*\([0-9]+,[0-9]+\): error TS' "$workspace/$1.diagnostics" || true
 }
@@ -91,7 +99,10 @@ report_program() {
     local entry
     for entry in "$@"; do explain_file "$config" "${entry%:*}" "${entry##*:}"; done
   fi
-  echo "errors: $(grep -cE ': error TS[0-9]+' "$workspace/$config.diagnostics" || true), in one's declarations: $(printf '%s' "$errors" | grep -c . || true)"
+  local count by_package
+  count=$(grep -cE ': error TS[0-9]+' "$workspace/$config.diagnostics" || true)
+  by_package=$(errors_by_package "$config")
+  echo "errors: $count${by_package:+ ($by_package)}"
   [ -z "$errors" ] || printf '%s\n' "$errors"
 }
 
