@@ -186,12 +186,12 @@ const fetchBundle = async (origin) => {
 }
 const describeBundle = ({ status, bytes, holds }) =>
   `${status}, ${bytes} bytes, holding ${holds.length > 0 ? holds.join(', ') : 'none of the markers'}`
-// `current` names the markers of the source on disk when the bundle was fetched; the bundle from before step 3 holds
+// `current` names the markers of the source on disk when the bundle was fetched; the bundle from before step 2 holds
 // the first and second modules' first versions and nothing of src/created.ts.
 const judgeBundle = (bundle, current) => {
   const same = (expected) => bundle.holds.length === expected.length && expected.every((m) => bundle.holds.includes(m))
   if (bundle.status === 200 && same(current)) return 'current'
-  if (bundle.status === 200 && same(['repro-first-v1', 'repro-second-v1'])) return 'from before step 3'
+  if (bundle.status === 200 && same(['repro-first-v1', 'repro-second-v1'])) return 'from before step 2'
   return 'unexpected'
 }
 
@@ -301,14 +301,14 @@ try {
     (lines) => lines.some((line) => line.includes('[hmr] native client connected') && line.includes(clientId.slice(-6))),
     60
   )
-  console.log(`step 2: /hot?platform=android&clientId=${clientId} connected, and one dev registered it`)
+  console.log(`step 1, the app's HMR client: /hot?platform=android&clientId=${clientId} connected, and one dev registered it`)
 
   let from = server.lines.length
   let message = client.nextMessage(updateSeconds)
   writeFileSync(join(app, 'src', 'first.ts'), files.first)
   const missingUpdate = await message
   const missingErrors = await errorLinesSince(from, missingUpdate)
-  console.log(`step 3: src/first.ts imports ./created, which does not exist: ${describeMessage(missingUpdate, updateSeconds)}`)
+  console.log(`step 2: src/first.ts imports ./created, which does not exist: ${describeMessage(missingUpdate, updateSeconds)}`)
   for (const line of missingErrors) console.log(`  one dev: ${redact(line)}`)
   if (missingUpdate?.type !== 'hmr:error' || !missingErrors.some(unresolvedCreated)) {
     throw new StepFailure("the update importing ./created before it exists did not fail on './created'")
@@ -318,22 +318,22 @@ try {
   message = client.nextMessage(quietSeconds)
   writeFileSync(join(app, 'src', 'created.ts'), files.created)
   const createdUpdate = await message
-  console.log(`step 4: src/created.ts written: ${describeMessage(createdUpdate, quietSeconds)}`)
+  console.log(`step 3: src/created.ts written: ${describeMessage(createdUpdate, quietSeconds)}`)
   for (const line of await errorLinesSince(from, createdUpdate)) console.log(`  one dev: ${redact(line)}`)
 
   const relaunch = await fetchBundle(origin)
-  console.log(`step 5, a launch: GET /index.bundle?platform=android: ${describeBundle(relaunch)}`)
+  console.log(`step 4, a launch: GET /index.bundle?platform=android: ${describeBundle(relaunch)}`)
 
   from = server.lines.length
   message = client.nextMessage(updateSeconds)
   writeFileSync(join(app, 'src', 'second.ts'), files.second)
   const importerUpdate = await message
   const importerErrors = await errorLinesSince(from, importerUpdate)
-  console.log(`step 6: src/second.ts imports ./created: ${describeMessage(importerUpdate, updateSeconds)}`)
+  console.log(`step 5: src/second.ts imports ./created: ${describeMessage(importerUpdate, updateSeconds)}`)
   for (const line of importerErrors) console.log(`  one dev: ${redact(line)}`)
 
   const lastLaunch = await fetchBundle(origin)
-  console.log(`step 7, a launch: GET /index.bundle?platform=android: ${describeBundle(lastLaunch)}`)
+  console.log(`step 6, a launch: GET /index.bundle?platform=android: ${describeBundle(lastLaunch)}`)
 
   const update =
     importerUpdate?.type === 'hmr:update' && importerUpdate.code.includes('repro-created-v1')
@@ -367,12 +367,12 @@ if (workspace) {
 for (const note of cleanupNotes) console.log(note)
 
 if (result) {
-  const defect = result.relaunch === 'from before step 3' || result.update !== 'holds src/created.ts' || result.lastLaunch === 'from before step 3'
+  const defect = result.relaunch === 'from before step 2' || result.update !== 'holds src/created.ts' || result.lastLaunch === 'from before step 2'
   const unexpected = [result.relaunch, result.update, result.lastLaunch].includes('unexpected')
   console.log('')
-  console.log(`step 5, a launch once src/created.ts exists: the bundle is ${result.relaunch}`)
-  console.log(`step 6, an update importing src/created.ts: ${result.update}`)
-  console.log(`step 7, a launch after that update: the bundle is ${result.lastLaunch}`)
+  console.log(`step 4, a launch once src/created.ts exists: the bundle is ${result.relaunch}`)
+  console.log(`step 5, an update importing src/created.ts: ${result.update}`)
+  console.log(`step 6, a launch after that update: the bundle is ${result.lastLaunch}`)
   if (unexpected) {
     console.log('a step ended another way than the defect or its fix')
     process.exit(2)
