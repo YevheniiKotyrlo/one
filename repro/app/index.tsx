@@ -1,4 +1,6 @@
 import { Text, View } from 'react-native'
+import { first } from '../src/first'
+import { second } from '../src/second'
 
 export default function Index() {
   return (
@@ -11,7 +13,8 @@ export default function Index() {
         minHeight: '100%',
       }}
     >
-      <Text>Hello world, from One</Text>
+      <Text>{first}</Text>
+      <Text>{second}</Text>
     </View>
   )
 }
