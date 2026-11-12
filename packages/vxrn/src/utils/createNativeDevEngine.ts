@@ -1025,6 +1025,15 @@ export async function createNativeDevEngine(
     // from @react-navigation/native which doesn't export it). metro silently shims
     // these — rolldown needs an explicit opt-in.
     shimMissingExports: true,
+    onwarn(warning, defaultHandler) {
+      if (
+        warning.code === 'MODULE_LEVEL_DIRECTIVE' &&
+        warning.message.includes('use client')
+      ) {
+        return
+      }
+      defaultHandler(warning)
+    },
 
     moduleTypes: {
       '.js': 'jsx',
@@ -1176,6 +1185,7 @@ try {
     // is only needed when the runtime requests a reload.
     rebuildStrategy: 'never',
     watch: {
+      skipWrite: true,
       exclude: ['**/node_modules/.test/**', '**/.git/**'],
     },
   })
@@ -1298,6 +1308,12 @@ try {
     // a runtime invalidation marks the full output stale before reloading. pull
     // that output before serving the cached bundle to the restarted app.
     await queueEngineWork(async () => {
+      // a task that failed in the Hmr stage leaves ensureLatestBuildOutput()
+      // answering nothing, so build from the files as they are first.
+      const state = await engine.getBundleState()
+      if (state.lastBuildErrored && state.lastErrorStage === 'Hmr') {
+        await engine.triggerFullBuild()
+      }
       await engine.ensureLatestBuildOutput()
       await outputProcessed
     })
@@ -1399,6 +1415,7 @@ export async function buildNativeBundle(
     : VIRTUAL_NATIVE_ENTRY
 
   const result = await build({
+    write: false,
     input: buildEntry,
     cwd: root,
     platform: 'neutral',
@@ -1414,6 +1431,15 @@ export async function buildNativeBundle(
       lazyBarrel: false,
     },
     shimMissingExports: true,
+    onwarn(warning, defaultHandler) {
+      if (
+        warning.code === 'MODULE_LEVEL_DIRECTIVE' &&
+        warning.message.includes('use client')
+      ) {
+        return
+      }
+      defaultHandler(warning)
+    },
     moduleTypes: { '.js': 'jsx' },
     plugins: [
       ...(entryFile ? [] : [nativeVirtualEntryPlugin(root, { dev, platform }).plugin]),
@@ -1436,6 +1462,8 @@ export async function buildNativeBundle(
       ...getNativeOutputOptions(prelude, sourcemap, minify),
       // native hosts evaluate a script; module bindings must stay out of globals.
       format: 'iife',
+      // cross-chunk ordering wrappers can emit extra chunks even with code splitting off.
+      strictExecutionOrder: false,
     },
   })
   const chunk = result.output.find((o) => o.type === 'chunk' && o.isEntry)

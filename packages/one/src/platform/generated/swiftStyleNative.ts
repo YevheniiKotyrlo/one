@@ -1787,6 +1787,7 @@ const sdkRecords: Record<
     kind: string
     optional: boolean
     continuous?: true
+    unbounded?: true
     unique?: boolean
     fields?: readonly { name: string; type: string; integer: boolean }[]
     eventValue?: SDKEventValueShape
@@ -1995,10 +1996,22 @@ const sdkRecords: Record<
     [
       { field: 'minWidth', kind: 'number', optional: true, continuous: true },
       { field: 'idealWidth', kind: 'number', optional: true, continuous: true },
-      { field: 'maxWidth', kind: 'number', optional: true, continuous: true },
+      {
+        field: 'maxWidth',
+        kind: 'number',
+        optional: true,
+        continuous: true,
+        unbounded: true,
+      },
       { field: 'minHeight', kind: 'number', optional: true, continuous: true },
       { field: 'idealHeight', kind: 'number', optional: true, continuous: true },
-      { field: 'maxHeight', kind: 'number', optional: true, continuous: true },
+      {
+        field: 'maxHeight',
+        kind: 'number',
+        optional: true,
+        continuous: true,
+        unbounded: true,
+      },
       { field: 'alignment', kind: 'enum', optional: false },
     ],
   frameWithWidthAndHeightAndAlignment: [
@@ -2494,6 +2507,7 @@ const sdkModifierValues: Record<string, string> = {
   listSectionSpacingWithListSectionSpacing: 'ListSectionSpacing',
   mapFeatureSelectionAccessory: 'MapItemDetailSelectionAccessoryStyle',
   mapStyle: 'MapStyle',
+  navigationTransition: 'style:navigationTransition',
   paletteSelectionEffect: 'PaletteSelectionEffect',
   presentationBackgroundInteraction: 'PresentationBackgroundInteraction',
   searchDictationBehavior: 'TextInputDictationBehavior',
@@ -3372,6 +3386,11 @@ const sdkValueShapes: Record<string, SDKValueShape> = {
     ],
     chain: [],
   },
+  'style:navigationTransition': {
+    cases: ['automatic', 'crossFade'],
+    factories: [{ name: 'zoom', parameters: [{ field: 'sourceID', kind: 'string' }] }],
+    chain: [],
+  },
   'style:tabViewStyle': {
     cases: ['sidebarAdaptable', 'page', 'tabBarOnly', 'automatic'],
     factories: [
@@ -3406,6 +3425,8 @@ function checkSDKParameter(
       )
   } else if (parameter.kind === 'boolean') {
     if (typeof value !== 'boolean') throw new Error(context + ' must be a boolean')
+  } else if (parameter.kind === 'string') {
+    if (typeof value !== 'string') throw new Error(context + ' must be a string')
   } else checkSDKValue(value, parameter.value!, context)
 }
 
@@ -3874,7 +3895,8 @@ export function swiftStyleNative(
             return sdkNumberState(item, name + '.' + argument.field)
           if (
             argument.kind === 'number' &&
-            (typeof item !== 'number' || !Number.isFinite(item))
+            (typeof item !== 'number' ||
+              !(Number.isFinite(item) || (argument.unbounded && item === Infinity)))
           )
             throw new Error(name + '.' + argument.field + ' must be finite')
           if (argument.kind === 'boolean' && typeof item !== 'boolean')

@@ -57,6 +57,21 @@ export const modifiers = [
   { name: 'webViewContentBackground', type: 'Visibility', module: 'SwiftUICore' },
 ] as const
 
+// sdk modifiers one carries past swiftui, chained after the sdk call with its first
+// argument: a matchedTransitionSource is also the router's zoom source of its id
+// (ios/OneZoomSources.swift).
+export const sdkModifierBridges: Readonly<Record<string, string>> = {
+  matchedTransitionSource: 'oneNativeRouterZoomSource',
+}
+
+// number arguments that also take infinity, as swiftui's .frame(maxWidth: .infinity) does
+export const sdkUnboundedArguments: Readonly<Record<string, readonly string[]>> = {
+  frameWithMinWidthAndIdealWidthAndMaxWidthAndMinHeightAndIdealHeightAndMaxHeightAndAlignment: [
+    'maxWidth',
+    'maxHeight',
+  ],
+}
+
 // a context menu is the same menu content on a different presentation, so Swift.Menu and
 // Swift.ContextMenu are one component with one trigger slot.
 export const menuMethods = [
@@ -1487,6 +1502,7 @@ export const components = [
       viewSlot: { name: 'slotName', values: 'slotValues', event: 'onNativeSDKEvent' },
       initial: { slotValues: '"[]"' },
       layout: 'measured',
+      boundedHeight: true,
       scheme: true,
       skipEmptyStyle: true,
     },
@@ -1499,7 +1515,8 @@ export const components = [
       onNativeSDKEvent: { name: 'string', value: 'string' },
     },
     enumProps: {},
-    // standalone, the overlay and the ViewSlot behind it report the height SwiftUI measured back to Yoga.
+    // standalone, the overlay and the ViewSlot behind it report the height SwiftUI measured back to
+    // Yoga, unless a style height bounds them, as a List or Form inside one needs.
     layout: { kind: 'measured' },
     slots: [
       {

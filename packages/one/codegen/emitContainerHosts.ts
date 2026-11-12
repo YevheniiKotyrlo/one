@@ -1772,7 +1772,7 @@ ${contentFields.join('\n')}
 }
 ${conversions.length ? `\n${conversions.join('\n\n')}\n` : ''}
 @objcMembers
-public final class ${name}View: ${leaf ? 'OneNativeStyledLeafView' : 'OneNativeContainerView'} {
+public final class ${name}View: ${leaf ? 'OneNativeStyledLeafView' : markerLayout ? 'OneNativeMarkerView' : 'OneNativeContainerView'} {
 ${viewFields.length ? `${viewFields.join('\n')}\n\n` : ''}  public init() {
 ${initLines.length ? `${initLines.join('\n')}\n` : ''}    super.init(styled: { ${leaf ? 'style' : 'children, style, standalone'} in
       AnyView(${short}Content(${contentArguments}))
@@ -2371,7 +2371,7 @@ ${contextMethods
 #include "OneNativeMeasuredShadowNode.h"
 namespace facebook::react {
 extern const char ${name}ComponentName[];
-using ${name}ShadowNode = OneNativeMeasuredShadowNode<${name}ComponentName, ${name}Props, ${name}EventEmitter>;
+using ${name}ShadowNode = OneNativeMeasuredShadowNode<${name}ComponentName, ${name}Props, ${name}EventEmitter${recipe.boundedHeight ? ', true' : ''}>;
 using ${name}ComponentDescriptor = OneNativeMeasuredComponentDescriptor<${name}ShadowNode>;
 }
 #endif

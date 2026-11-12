@@ -66,8 +66,8 @@ export function sdkModules(sdk = sdkPath()): string[] {
 }
 
 // graphs depend only on the sdk, so every checkout shares one cache
-function cacheDir(version: string) {
-  const dir = join(homedir(), '.cache', 'one', 'sdk-graphs', version)
+function cacheDir(version: string, sdk = 'iphonesimulator') {
+  const dir = join(homedir(), '.cache', 'one', 'sdk-graphs', sdk === 'iphonesimulator' ? version : `${version}-${sdk}`)
   mkdirSync(dir, { recursive: true })
   return dir
 }
@@ -78,10 +78,15 @@ export async function extractGraphs(
   modules: string[],
   { concurrency = 6, minimumIos = '18.0' } = {}
 ): Promise<{ extracted: string[]; failed: { module: string; error: string }[] }> {
-  const sdk = sdkPath()
-  const dir = cacheDir(sdkVersion())
-  const cached = new Set(readdirSync(dir).map((file) => file.split(/[.@]/)[0]))
-  const pending = modules.filter((module) => !cached.has(module))
+  const version = sdkVersion()
+  const targets = [
+    { dir: cacheDir(version), sdk: sdkPath('iphonesimulator'), target: `arm64-apple-ios${minimumIos}-simulator`, cached: new Set<string>() },
+    { dir: cacheDir(version, 'iphoneos'), sdk: sdkPath('iphoneos'), target: `arm64-apple-ios${minimumIos}`, cached: new Set<string>() },
+  ]
+  for (const t of targets) {
+    for (const file of readdirSync(t.dir)) t.cached.add(file.split(/[.@]/)[0])
+  }
+  const pending = modules.filter((module) => targets.some((t) => !t.cached.has(module)))
   const failed: { module: string; error: string }[] = []
   const extracted: string[] = []
   let next = 0
@@ -89,9 +94,12 @@ export async function extractGraphs(
     while (next < pending.length) {
       const module = pending[next++]
       try {
-        await run('xcrun', ['swift-symbolgraph-extract', '-module-name', module,
-          '-target', `arm64-apple-ios${minimumIos}-simulator`, '-sdk', sdk,
-          '-output-dir', dir, '-minimum-access-level', 'public'], { maxBuffer: 64 * 1024 * 1024 })
+        for (const t of targets) {
+          if (t.cached.has(module)) continue
+          await run('xcrun', ['swift-symbolgraph-extract', '-module-name', module,
+            '-target', t.target, '-sdk', t.sdk,
+            '-output-dir', t.dir, '-minimum-access-level', 'public'], { maxBuffer: 64 * 1024 * 1024 })
+        }
         extracted.push(module)
       } catch (error) {
         const text = error instanceof Error && 'stderr' in error ? String(error.stderr) : String(error)
@@ -105,21 +113,89 @@ export async function extractGraphs(
 
 // a module's own graph plus the extension graphs it declares on other modules
 // (`HealthKit@Foundation.symbols.json`), which hold members it adds to them. a
-// cross-import overlay has only extension graphs.
+// cross-import overlay has only extension graphs. symbols missing from the
+// device sdk (such as Foundation's simulator-only SocketPort) are dropped.
 export function loadGraph(module: string): Graph | null {
-  const dir = cacheDir(sdkVersion())
+  const version = sdkVersion()
+  const dir = cacheDir(version)
+  const deviceDir = cacheDir(version, 'iphoneos')
   const files = readdirSync(dir)
     .filter((file) => (file === `${module}.symbols.json` || file.startsWith(`${module}@`)) && file.endsWith('.symbols.json'))
-    .map((file) => join(dir, file))
   if (!files.length) return null
+  const dropped = new Set<string>()
   const graph: Graph = { module, symbols: [], relationships: [] }
   for (const file of files) {
-    const data = JSON.parse(readFileSync(file, 'utf8')) as { symbols: Symbol[]; relationships?: Relationship[] }
-    graph.symbols.push(...data.symbols)
-    graph.relationships.push(...(data.relationships ?? []))
+    const deviceFile = join(deviceDir, file)
+    const deviceIds = new Set<string>()
+    if (existsSync(deviceFile)) readGraphFile(deviceFile, (symbol) => deviceIds.add(symbol.identifier.precise))
+    readGraphFile(join(dir, file), (symbol) => {
+      if (deviceIds.size && !deviceIds.has(symbol.identifier.precise)) {
+        dropped.add(symbol.identifier.precise)
+      } else {
+        graph.symbols.push(symbol)
+      }
+    }, (relationship) => graph.relationships.push(relationship))
+  }
+  if (dropped.size) {
+    graph.relationships = graph.relationships.filter((r) => !dropped.has(r.source) && !dropped.has(r.target))
   }
   addInheritedInitializers(graph)
   return graph
+}
+
+// symbol graphs can exceed hundreds of megabytes. parse one array member at a
+// time so the device graph never expands into an entire second object tree.
+function readGraphFile(file: string, symbol: (value: Symbol) => void, relationship?: (value: Relationship) => void) {
+  const json = readFileSync(file, 'utf8')
+  const tokens = /[{}\[\]"\\]/g
+  let depth = 0
+  let quoted = false
+  let seenSymbols = false
+  let token: RegExpExecArray | null
+  while ((token = tokens.exec(json))) {
+    const char = token[0]
+    if (quoted) {
+      if (char === '\\') tokens.lastIndex++
+      else if (char === '"') quoted = false
+    } else if (char === '"') {
+      const array = depth === 1 && /^"(symbols|relationships)"\s*:\s*\[/.exec(json.slice(token.index))
+      if (!array) {
+        quoted = true
+        continue
+      }
+      if (array[1] === 'symbols') seenSymbols = true
+      let at = token.index + array[0].length
+      for (;;) {
+        while (/\s/.test(json[at] ?? '')) at++
+        if (json[at] === ']') break
+        if (json[at] !== '{') throw new SyntaxError(`Invalid symbol graph array in ${file}`)
+        const start = at
+        tokens.lastIndex = at
+        let objectDepth = 0
+        let inString = false
+        while ((token = tokens.exec(json))) {
+          if (inString) {
+            if (token[0] === '\\') tokens.lastIndex++
+            else if (token[0] === '"') inString = false
+          } else if (token[0] === '"') inString = true
+          else if (token[0] === '{') objectDepth++
+          else if (token[0] === '}' && --objectDepth === 0) break
+        }
+        if (!token) throw new SyntaxError(`Unterminated symbol graph array in ${file}`)
+        if (array[1] === 'symbols') symbol(JSON.parse(json.slice(start, tokens.lastIndex)))
+        else if (relationship) relationship(JSON.parse(json.slice(start, tokens.lastIndex)))
+        at = tokens.lastIndex
+        while (/\s/.test(json[at] ?? '')) at++
+        if (json[at] === ']') break
+        if (json[at++] !== ',') throw new SyntaxError(`Invalid symbol graph array in ${file}`)
+      }
+      tokens.lastIndex = at + 1
+    } else if (char === '{' || char === '[') depth++
+    else if (char === '}' || char === ']') depth--
+  }
+  if (depth !== 0 || quoted || !seenSymbols || !/^\s*\{/.test(json) || !/\}\s*$/.test(json)) {
+    throw new SyntaxError(`Incomplete symbol graph in ${file}`)
+  }
 }
 
 // an objective-c class inherits -init from NSObject, but a symbol graph lists
