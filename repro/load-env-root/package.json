@@ -1,0 +1,8 @@
+{
+  "name": "repro-load-env-root",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "vxrn": "2.17.1"
+  }
+}
