@@ -16,8 +16,8 @@
 #                  declares optional peers; exits 1 while the bundle cannot resolve either, 0 once it bundles
 #   no-tsconfig    the app has no tsconfig.json; exits 1 while its config fails to load with "tsconfig.json paths could
 #                  not be loaded", 0 once it bundles
-#   isolated-dependency  the app, in a Bun workspace with the isolated linker that links one's own packages and
-#                  Rolldown at its root, does not list @react-navigation/elements, bottom-tabs or native-stack, which
+#   isolated-dependency  the app, in a Bun workspace with the isolated linker, does not list
+#                  @react-navigation/elements, bottom-tabs or native-stack, which
 #                  one depends on; beside it, plain-react-native bundles @react-navigation/native-stack on React
 #                  Native's default Metro config; exits 1 while the One app cannot resolve one of them from one's
 #                  files, 0 once it bundles
@@ -248,7 +248,7 @@ isolated_dependency() {
   node "$repro/edit-manifests.mjs" drop-dependencies "$app" @react-navigation/elements @react-navigation/bottom-tabs \
     @react-navigation/native-stack
   node "$repro/edit-manifests.mjs" workspace-root "$root" "$app" plain-react-native
-  printf '[install]\nlinker = "isolated"\npublicHoistPattern = ["@vxrn/*", "rolldown"]\n' > "$root/bunfig.toml"
+  printf '[install]\nlinker = "isolated"\n' > "$root/bunfig.toml"
   install_app "$root"
   one_folder=$(cd "$app/node_modules/one" && pwd -P)
   linked=no
