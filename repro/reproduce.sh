@@ -99,6 +99,8 @@ watch_folders() {
   install_app "$app"
   # Written once the app is installed, so Bun installs the app on its own and Vite finds this root.
   printf '{ "private": true, "workspaces": ["app"] }\n' > "$root/package.json"
+  # A workspace install leaves node_modules at the root; Metro stats every watch folder.
+  mkdir -p "$root/node_modules"
   mkdir -p "$root/target/deps"
   printf "module.exports = 'build output below the workspace root'\n" > "$root/target/build-output.js"
   printf "\nexport const buildOutput = require('../../target/build-output.js')\n" >> "$app/app/index.tsx"
