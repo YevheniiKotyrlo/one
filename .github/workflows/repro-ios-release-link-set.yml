@@ -11,6 +11,11 @@ jobs:
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v6
+      # the newest Xcode 27 on the image, as One's own iOS CI builds with Xcode 27.
+      - name: Select Xcode 27
+        run: |
+          ls -d /Applications/Xcode_*.app
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_27*.app | sort -V | tail -1)"
       - uses: actions/setup-node@v6
         with:
           node-version-file: '.node-version'
