@@ -1,0 +1,29 @@
+name: repro — iOS Release binary of repro/
+
+on:
+  push:
+    branches: [repro/ios-motion-face-id-link-set]
+  workflow_dispatch:
+
+jobs:
+  build-ios-release:
+    runs-on: macos-26
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: '.node-version'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: 'package.json'
+      - name: Build repro/ for iOS in Release and read its binary
+        env:
+          REPRO_LOG: ${{ runner.temp }}/xcodebuild.log
+        run: node repro/reproduce-ios.mjs
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: xcodebuild.log
+          path: ${{ runner.temp }}/xcodebuild.log
+          if-no-files-found: ignore
