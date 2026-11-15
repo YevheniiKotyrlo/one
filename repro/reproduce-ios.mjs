@@ -5,12 +5,14 @@
 // repro/ is an app on this checkout's one (`workspace:*`) with a `native.app` name and ids, nothing else. The script
 // builds the workspace, installs repro/ outside it from the workspace's packed packages (use-workspace-packages.mjs),
 // runs `one prebuild --platform ios`, prints the ios/one-link-set.json it wrote, builds the app's Release
-// configuration for iOS devices without signing, and prints the Core Motion and LocalAuthentication classes the app
-// binary and One's object files reference (`nm -um`) and the purpose strings of the app's Info.plist. It removes the
-// app's folder before it prints the result.
+// configuration for iOS devices without signing, and prints the Core Motion and LocalAuthentication classes One's
+// Release object files reference (`nm -um`), and, once the app links, those its binary references and the purpose
+// strings of its Info.plist. xcodebuild keeps compiling after an error, so One's object files are read even when
+// another of One's files fails to compile with this Xcode. It removes the app's folder before it prints the result.
 // Needs macOS and Xcode. From the checkout: node repro/reproduce-ios.mjs
-// Exits 1 while the Release binary references CMPedometer, CMAltimeter or LAContext, 0 once it references none, and 2
-// when a step fails, prebuild writes no link set, or the build fails.
+// Exits 1 while One's Release objects, or the app binary, reference CMPedometer, CMAltimeter or LAContext with a link
+// set that names no group, 0 once the app builds and its binary references none, and 2 when a step fails, prebuild
+// writes no link set, or the build fails without One's objects referencing them.
 import { spawn } from 'node:child_process'
 import { cpSync, createWriteStream, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { release, tmpdir } from 'node:os'
@@ -26,16 +28,27 @@ const protectedSymbol = new RegExp(`_OBJC_CLASS_\\$_(${protectedClasses.join('|'
 class StepFailure extends Error {}
 
 // The verdict on a finished build: xcodebuild's exit status, the link set prebuild wrote (undefined when it wrote
-// none), and the `nm -um` lines of the app's Mach-O files that name a protected class.
-export const judge = ({ status, linkSet, binaryReferences }) => {
+// none), the `nm -um` lines of the app's Mach-O files that name a protected class (none when the app did not link),
+// and the protected classes each of One's Release object files references.
+export const judge = ({ status, linkSet, binaryReferences, objectReferences = {} }) => {
   if (linkSet === undefined) {
     return { exitCode: 2, verdict: 'one prebuild wrote no ios/one-link-set.json, so the Release build links every group' }
   }
-  if (status !== 0) return { exitCode: 2, verdict: `xcodebuild exited ${status}` }
+  const groups = linkSet.groups?.length ? linkSet.groups.join(', ') : 'none'
+  const inObjects = protectedClasses.filter((name) => Object.values(objectReferences).some((list) => list.includes(name)))
+  if (status !== 0) {
+    if (!inObjects.length) return { exitCode: 2, verdict: `xcodebuild exited ${status}` }
+    const files = Object.keys(objectReferences).filter((file) => objectReferences[file].length)
+    return {
+      exitCode: 1,
+      verdict:
+        `One's Release objects ${files.join(', ')} reference ${inObjects.join(', ')} though ios/one-link-set.json ` +
+        `names groups: ${groups} (xcodebuild exited ${status}, so the app did not link)`,
+    }
+  }
   const referenced = protectedClasses.filter((name) =>
     binaryReferences.some((line) => new RegExp(`_OBJC_CLASS_\\$_${name}\\b`).test(line))
   )
-  const groups = linkSet.groups?.length ? linkSet.groups.join(', ') : 'none'
   if (referenced.length) {
     return {
       exitCode: 1,
@@ -150,18 +163,38 @@ const reproduce = async () => {
   const logFile = process.env.REPRO_LOG || join(tmpdir(), 'one-repro-xcodebuild.log')
   const buildArguments = [
     '-workspace', join('ios', xcworkspace), '-scheme', scheme, '-configuration', 'Release', '-sdk', 'iphoneos',
-    '-destination', 'generic/platform=iOS', '-derivedDataPath', derivedData, 'CODE_SIGNING_ALLOWED=NO', 'build',
+    '-destination', 'generic/platform=iOS', '-derivedDataPath', derivedData, '-IDEBuildingContinueBuildingAfterErrors=YES',
+    'CODE_SIGNING_ALLOWED=NO', 'build',
   ]
   console.log(`xcodebuild ${buildArguments.map(redact).join(' ')} > ${redact(logFile)}`)
   const status = await run('xcodebuild', buildArguments, { cwd: app, env: environment, logFile })
   const log = readFileSync(logFile, 'utf8').split('\n')
   for (const line of log.filter((text) => /^\*\* BUILD (SUCCEEDED|FAILED) \*\*$/.test(text))) console.log(line)
   if (status !== 0) {
-    const failedCommands = log.indexOf('The following build commands failed:')
-    for (const line of log.filter((text) => / error: /.test(text)).slice(0, 10)) console.log(redact(line))
-    if (failedCommands !== -1) for (const line of log.slice(failedCommands, failedCommands + 6)) console.log(redact(line))
-    return judge({ status, linkSet, binaryReferences: [] })
+    const errors = [...new Set(log.filter((text) => /\.(swift|mm?|cpp|h):\d+:\d+: error: /.test(text)))]
+    for (const line of errors.slice(0, 10)) console.log(redact(line).replace(/^.*\/node_modules\/one\//, 'node_modules/one/'))
   }
+
+  // One's own Release object files, and the protected classes each references.
+  const oneObjects = filesBelow(
+    join(derivedData, 'Build', 'Intermediates.noindex', 'Pods.build', 'Release-iphoneos', 'One.build'),
+    (name) => name.endsWith('.o')
+  ).sort()
+  const objectReferences = {}
+  for (const object of oneObjects) {
+    const classes = [
+      ...new Set(
+        (await read('nm', ['-um', object]))
+          .split('\n')
+          .map((line) => protectedSymbol.exec(line)?.[1])
+          .filter(Boolean)
+      ),
+    ]
+    if (classes.length) objectReferences[object.split('/').at(-1)] = classes
+  }
+  console.log(`One's Release object files: ${oneObjects.length}; those that reference ${protectedClasses.join(', ')}:`)
+  for (const [object, classes] of Object.entries(objectReferences)) console.log(`  ${object}: ${classes.join(', ')}`)
+  if (status !== 0) return judge({ status, linkSet, binaryReferences: [], objectReferences })
 
   const products = join(derivedData, 'Build', 'Products', 'Release-iphoneos')
   const appName = readdirSync(products).find((name) => name.endsWith('.app'))
@@ -177,28 +210,9 @@ const reproduce = async () => {
     for (const line of lines) console.log(`  ${line.trim()}`)
     binaryReferences.push(...lines)
   }
-
-  // One's own object files, to name the source file each reference comes from.
-  const oneObjects = filesBelow(
-    join(derivedData, 'Build', 'Intermediates.noindex', 'Pods.build', 'Release-iphoneos', 'One.build'),
-    (name) => name.endsWith('.o')
-  )
-  console.log(`One's ${oneObjects.length} Release object files that reference ${protectedClasses.join(', ')}:`)
-  for (const object of oneObjects.sort()) {
-    const classes = [
-      ...new Set(
-        (await read('nm', ['-um', object]))
-          .split('\n')
-          .map((line) => protectedSymbol.exec(line)?.[1])
-          .filter(Boolean)
-      ),
-    ]
-    if (classes.length) console.log(`  ${object.split('/').at(-1)}: ${classes.join(', ')}`)
-  }
-
   const purposeStrings = Object.keys(info).filter((key) => /^NS\w+UsageDescription$/.test(key))
   console.log(`${appName}/Info.plist purpose strings: ${purposeStrings.join(', ') || 'none'}`)
-  return judge({ status, linkSet, binaryReferences })
+  return judge({ status, linkSet, binaryReferences, objectReferences })
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

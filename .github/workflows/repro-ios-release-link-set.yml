@@ -7,15 +7,13 @@ on:
 
 jobs:
   build-ios-release:
-    runs-on: macos-27
+    runs-on: macos-26
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v6
-      # the newest Xcode 27 on the image, as One's own iOS CI builds with Xcode 27.
-      - name: Select Xcode 27
-        run: |
-          ls -d /Applications/Xcode_*.app
-          sudo xcode-select -s "$(ls -d /Applications/Xcode_27*.app | sort -V | tail -1)"
+      # the newest Xcode on GitHub's macOS images, which carry no Xcode 27.
+      - name: Set Xcode version
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
       - uses: actions/setup-node@v6
         with:
           node-version-file: '.node-version'
