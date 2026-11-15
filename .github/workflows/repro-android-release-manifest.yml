@@ -1,0 +1,28 @@
+name: repro — Android release manifest of repro/
+
+on:
+  push:
+    branches: [repro/android-location-foreground-service]
+  workflow_dispatch:
+
+jobs:
+  merge-android-release-manifest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools platforms;android-37.0 build-tools;37.0.0 ndk;27.1.12297006 cmake;3.22.1'
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: '.node-version'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: 'package.json'
+      - name: Merge repro/'s Android release manifest
+        run: node repro/reproduce-android.mjs
